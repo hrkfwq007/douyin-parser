@@ -15,7 +15,7 @@
 
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Source--Available-blue.svg)](LICENSE)
 [![Qt6](https://img.shields.io/badge/GUI-Qt6-purple.svg)](https://www.qt.io/)
 
 ## ✨ 核心特性
@@ -152,7 +152,10 @@ python qt_app_slim.py     # 精简版
 - **X-Bogus算法**：MD5哈希 + RC4加密
 - 纯Python实现，无需JavaScript引擎
 
-> **核心算法参考**：本项目的 `a_bogus` 和 `X-Bogus` 算法实现参考自开源项目 [Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)，感谢原作者的开源贡献！
+> **代码来源**：本项目在 [DLWangSan/douyin_parse](https://github.com/DLWangSan/douyin_parse)（最后同步版本 `0896c74`，2026-08-14）的基础上二次开发，
+> 新增了离线激活授权体系、解析详情面板、互动数据、图集缩略图、无水印直链复制等功能，并重构了 Qt6 界面。
+>
+> **核心算法参考**：`a_bogus` 和 `X-Bogus` 算法实现参考自开源项目 [Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)，感谢原作者的开源贡献！
 
 ### 无水印提取
 - 识别 `play_addr` 中的 `uri` 参数
@@ -261,6 +264,7 @@ dy_cursor/
 
 ## 🙏 致谢
 
+- 基础项目：[DLWangSan/douyin_parse](https://github.com/DLWangSan/douyin_parse) - 本项目在此之上二次开发，感谢原作者与各位贡献者！
 - 核心算法参考：[Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API) - 感谢原作者 Evil0ctal 的开源贡献！
 
 ## 🤝 贡献
@@ -279,4 +283,32 @@ MIT License
 
 **⭐ 如果这个工具对你有帮助，欢迎给个Star！**
 
-## 📈 Star History[![Star History Chart](https://star-history.dera.page/svg?repos=DLWangSan/douyin_parse&type=Date)](https://star-history.dera.page/#DLWangSan/douyin_parse&Date)
+## 📈 Star History[![Star History Chart](https://star-history.dera.page/svg?repos=hrkfwq007/douyin-parser&type=Date)](https://star-history.dera.page/#hrkfwq007/douyin-parser&Date)
+---
+
+## 获取软件与激活
+
+软件为付费授权，四个档位功能完全一致，只差有效期：
+
+| 套餐 | 价格 | 有效期 |
+|---|---|---|
+| 月版 | ¥19 | 30 天 |
+| 半年版 | ¥68 | 180 天 |
+| 年版 | ¥90 | 365 天 |
+| 终身版 | ¥160 | 永久 |
+
+购买后会自动收到激活码（支持通用码，不绑设备，换机可直接重新激活）。
+首页与下单入口：<https://douyin-parser-42948.app.workbuddy.host/>
+
+### 关于 activation.py
+
+本仓库**不包含**真实的 `activation.py`（里面有激活私钥），只提供 `activation.example.py`。
+自行编译请先：
+
+```bash
+cp activation.example.py activation.py
+# 然后把 SECRET 改成你自己的强随机值，例如：
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+改过 SECRET 后，之前生成的所有激活码都会失效，需要重新生成。

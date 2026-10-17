@@ -2,6 +2,7 @@
 Douyin Video Downloader - Qt6 GUI Application
 Full version with auto cookie acquisition support
 """
+import html
 import json
 import os
 import re
@@ -9,10 +10,11 @@ import sys
 from datetime import datetime
 
 import requests
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QSize, QThread, Signal, QPropertyAnimation, QEasingCurve, QTimer
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QStyle,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -35,9 +37,11 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QGroupBox,
     QScrollArea,
+    QGraphicsOpacityEffect,
 )
 
 from douyin_video_parser import DouyinVideoParser
+import activation
 
 DISABLE_LOGIN = os.environ.get("DISABLE_LOGIN", "0") == "1"
 
@@ -50,10 +54,34 @@ if getattr(sys, "frozen", False):
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
+    RESOURCE_DIR = getattr(sys, "_MEIPASS", BASE_DIR)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    RESOURCE_DIR = BASE_DIR
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_SAVE_DIR = os.path.join(BASE_DIR, "downloads")
+
+
+def _browser_available():
+    """精简版（未打包 Chromium 内核）返回 (False, 原因)，否则 (True, 路径)。
+
+    打包时会把 PLAYWRIGHT_BROWSERS_PATH 指向 _MEIPASS/playwright-browsers；
+    精简版没有该目录，据此判断能否扫码登录。
+    """
+    if not getattr(sys, "frozen", False):
+        return True, "源码模式"
+    base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
+    if not base or not os.path.isdir(base):
+        return False, "未内置浏览器内核目录"
+    try:
+        for name in os.listdir(base):
+            if name.startswith("chromium"):
+                exe = os.path.join(base, name, "chrome-win", "chrome.exe")
+                if os.path.exists(exe):
+                    return True, exe
+    except Exception:
+        pass
+    return False, "未找到 chrome.exe"
 
 
 def safe_filename(text: str, fallback: str) -> str:
@@ -72,6 +100,74 @@ def format_time(ts: int | None) -> str:
         return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ""
+
+
+def _style_icon(pixmap_name: str):
+    """返回 Qt 内置标准图标；枚举不存在时回退空图标，保证不崩溃。"""
+    sp = getattr(QStyle, pixmap_name, None)
+    if sp is None:
+        return QIcon()
+    return QApplication.style().standardIcon(sp)
+
+
+def _esc(text) -> str:
+    return html.escape("" if text is None else str(text))
+
+
+def _kv_table(rows) -> str:
+    """rows: [(label, value, mono), ...] -> 键值表格富文本（QLabel 子集）。"""
+    body = ""
+    for k, v, mono in rows:
+        vstyle = "font-family:Consolas, 'Courier New', monospace;" if mono else ""
+        body += (
+            f"<tr>"
+            f"<td style='color:#7c869b; padding:5px 14px 5px 0; vertical-align:top;'>{_esc(k)}</td>"
+            f"<td style='color:#e6e6e6; {vstyle} padding:5px 0; vertical-align:top;'>{_esc(v)}</td>"
+            f"</tr>"
+        )
+    return f"<table cellpadding='0' cellspacing='0' style='font-size:14px;'>{body}</table>"
+
+
+def fmt_count(n) -> str:
+    """抖音计数格式化：亿/万 缩写，None 显示 -。"""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "-"
+    if n >= 100000000:
+        return f"{n / 100000000:.1f}亿"
+    if n >= 10000:
+        return f"{n / 10000:.1f}万"
+    return str(n)
+
+
+def fmt_duration(ms) -> str | None:
+    """毫秒 -> mm:ss；无法解析返回 None。"""
+    try:
+        ms = int(ms)
+    except (TypeError, ValueError):
+        return None
+    if ms <= 0:
+        return None
+    total = ms // 1000
+    m, s = divmod(total, 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def _stat_tiles(rows) -> str:
+    """rows: [(label, value), ...] -> 横向统计磁贴表格（QLabel 富文本子集）。"""
+    cells = ""
+    for label, value in rows:
+        cells += (
+            f"<td style='background:#1b2030; padding:8px 6px; text-align:center;'>"
+            f"<div style='color:#f5f7fa; font-size:15px; font-weight:bold;'>{_esc(value)}</div>"
+            f"<div style='color:#7c869b; font-size:11px; margin-top:3px;'>{_esc(label)}</div>"
+            f"</td>"
+        )
+    return (
+        f"<table width='100%' cellpadding='0' cellspacing='8' style='font-size:14px;'>"
+        f"<tr>{cells}</tr></table>"
+    )
 
 
 def load_config() -> dict:
@@ -438,6 +534,9 @@ class ParseSingleWorker(QThread):
         self.url = url
 
     def run(self):
+        if not self.parser.cookie:
+            self.error.emit("解析失败：尚未配置 Cookie，请先点击「获取Cookie」扫码登录")
+            return
         try:
             info = self.parser.parse_video(self.url)
             if not info:
@@ -486,6 +585,9 @@ class ParseListWorker(QThread):
         self.urls = urls
 
     def run(self):
+        if not self.parser.cookie:
+            self.error.emit("解析失败：尚未配置 Cookie，请先点击「获取Cookie」扫码登录")
+            return
         if not self.urls:
             self.error.emit("列表为空")
             return
@@ -510,6 +612,9 @@ class ParseUserWorker(QThread):
         self.max_pages = max_pages
 
     def run(self):
+        if not self.parser.cookie:
+            self.error.emit("解析失败：尚未配置 Cookie，请先点击「获取Cookie」扫码登录")
+            return
         url = self.url
         if "douyin.com/video/" in url or "v.douyin.com/" in url:
             user_home = self.parser.get_user_home_from_video_url(url)
@@ -783,6 +888,43 @@ class CookieWorker(QThread):
             self.error.emit(f"获取失败: {e}")
 
 
+class ClickableLabel(QLabel):
+    """支持点击信号的 QLabel，用于缩略图点击切换大图。"""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class ThumbnailWorker(QThread):
+    """后台异步下载图集缩略图，逐张回传给主线程渲染。"""
+
+    loaded = Signal(int, QPixmap, str)
+    error = Signal(str)
+
+    def __init__(self, urls, parent=None):
+        super().__init__(parent)
+        self.urls = urls
+
+    def run(self):
+        for idx, url in enumerate(self.urls):
+            if self.isInterruptionRequested():
+                break
+            try:
+                resp = requests.get(url, timeout=10, headers={"User-Agent": DOUYIN_UA})
+                if resp.status_code == 200:
+                    pix = QPixmap()
+                    if pix.loadFromData(resp.content):
+                        thumb = pix.scaled(
+                            100, 100, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+                        )
+                        self.loaded.emit(idx, thumb, url)
+            except Exception as e:
+                self.error.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -790,9 +932,19 @@ class MainWindow(QMainWindow):
         self.config = load_config()
         self.parser.set_cookie(self.config.get("cookie"))
         self.save_dir = self.config.get("save_dir", DEFAULT_SAVE_DIR)
+        self.thumbnail_worker = None
 
-        self.setWindowTitle("抖音无水印解析器 v2.0.4")
-        self.setMinimumSize(1200, 760)
+        # 标题带上当前授权套餐与到期日，用户随时可见自己的授权状态
+        _label, _expiry = activation.active_plan()
+        if _label:
+            _tail = "（终身授权）" if _expiry == "终身" else f"（{_label} · 至 {_expiry}）"
+        else:
+            _tail = "（未激活）"
+        self.setWindowTitle(f"抖音无水印解析器 v2.1{_tail}")
+        self.setMinimumSize(1220, 860)
+        icon_path = os.path.join(RESOURCE_DIR, "assets", "logo.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         tabs = QTabWidget()
         tabs.addTab(self._build_single_tab(), "单视频下载")
@@ -800,94 +952,294 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_config_tab(), "配置")
         self.setCentralWidget(tabs)
         self._apply_style()
+        self._apply_icons()
 
     def _apply_style(self):
         self.setStyleSheet(
             """
-            QWidget { background: #0f1115; color: #e6e6e6; font-size: 14px; }
-            QLineEdit, QSpinBox, QPlainTextEdit { background: #1b1f2a; border: 1px solid #2b3142; padding: 8px; border-radius: 6px; }
-            QPushButton { background: #3b82f6; border: none; padding: 8px 14px; border-radius: 6px; }
-            QPushButton:hover { background: #2563eb; }
-            QPushButton:disabled { background: #394256; }
-            QTabBar::tab { padding: 10px 16px; background: #1b1f2a; margin: 2px; border-radius: 6px; }
-            QTabBar::tab:selected { background: #2b3142; }
-            QTableWidget { background: #121520; border: 1px solid #2b3142; }
-            QHeaderView::section { background: #1b1f2a; padding: 6px; border: none; }
+            QWidget { background: #0f1115; color: #e6e6e6; font-size: 14px;
+                font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif; }
+            #Card { background: #181c25; border: 1px solid #262c3a; border-radius: 14px; padding: 20px; }
+            QLabel#Title { font-size: 19px; font-weight: bold; color: #f5f7fa; }
+            QLabel#Hint { font-size: 12px; color: #7c869b; }
+            QLineEdit, QSpinBox, QPlainTextEdit { background: #1b1f2a; border: 1px solid #2b3142;
+                padding: 10px 13px; border-radius: 9px; color: #e6e6e6; }
+            QLineEdit:focus, QSpinBox:focus, QPlainTextEdit:focus { border: 1px solid #3b82f6; }
+            QPushButton { background: #2b3142; border: none; padding: 10px 16px;
+                border-radius: 9px; color: #d6dbe6; }
+            QPushButton:hover { background: #343c52; }
+            QPushButton:disabled { background: #1d2130; color: #555d72; }
+            QPushButton#Primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #3b82f6, stop:1 #2563eb); color: #ffffff; font-weight: bold; }
+            QPushButton#Primary:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #4c8ef7, stop:1 #2f6fe6); }
+            QPushButton#Primary:disabled { background: #233048; color: #8094ba; }
+            QPushButton#Accent { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #fe2c55, stop:1 #e01e4b); color: #ffffff; font-weight: bold; }
+            QPushButton#Accent:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #ff3d63, stop:1 #ec2453); }
+            QPushButton#Accent:disabled { background: #3a1a24; color: #b07a89; }
+            QLabel#Label { color: #7c869b; font-size: 13px; }
+            QTabBar::tab { padding: 11px 20px; background: #14171f; margin: 3px 3px;
+                border-radius: 9px; color: #9aa3b2; }
+            QTabBar::tab:hover { color: #d6dbe6; }
+            QTabBar::tab:selected { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                stop:0 #2b3142, stop:1 #222838); color: #ffffff; }
+            QTabWidget::pane { border: 1px solid #262c3a; border-radius: 14px; top: -1px; }
+            QTableWidget { background: #121520; border: 1px solid #2b3142; border-radius: 10px;
+                gridline-color: #222838; }
+            QHeaderView::section { background: #1b1f2a; padding: 9px; border: none; color: #9aa3b2; }
+            QProgressBar { background: #1b1f2a; border: 1px solid #2b3142; border-radius: 7px;
+                text-align: center; color: #cdd3e0; height: 14px; }
+            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #3b82f6, stop:1 #22d3ee); border-radius: 6px; }
+            QGroupBox { border: 1px solid #262c3a; border-radius: 12px; margin-top: 12px;
+                padding-top: 14px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 16px; color: #9aa3b2; }
+            QScrollArea { border: none; }
             """
         )
 
+    def _apply_icons(self):
+        icon_map = {
+            "解析": "SP_MediaPlay",
+            "下载到默认目录": "SP_ArrowDown",
+            "下载勾选(默认目录)": "SP_ArrowDown",
+            "清空": "SP_TrashIcon",
+            "打开文件夹": "SP_DirOpenIcon",
+            "选择目录": "SP_DirIcon",
+            "获取Cookie": "SP_DialogApplyButton",
+            "保存配置": "SP_DialogSaveButton",
+        }
+        for btn in self.findChildren(QPushButton):
+            name = btn.text()
+            if name in icon_map:
+                btn.setIcon(_style_icon(icon_map[name]))
+                btn.setIconSize(QSize(18, 18))
+
+    def _fade_in(self, widget):
+        """解析完成后对结果区做 0→1 淡入；动画对象挂到 widget 上防止被回收，
+        结束后移除特效。任何异常都静默降级为不透明（绝不留下透明面板）。"""
+        try:
+            if widget.graphicsEffect() is not None:
+                widget.setGraphicsEffect(None)
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+            # 关键：把动画挂到 widget 作为父对象，避免 Python 引用释放后被 C++ 回收，
+            # 否则 opacity 会卡在起始值 0.0，导致结果面板整块不可见。
+            anim = QPropertyAnimation(effect, b"opacity", widget)
+            anim.setDuration(420)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.OutCubic)
+            anim.finished.connect(lambda: widget.setGraphicsEffect(None))
+            anim.start(QPropertyAnimation.DeleteWhenStopped)
+            # 安全兜底：0.6s 后若仍透明（极端情况下动画未触发），强制显示。
+            QTimer.singleShot(600, lambda: widget.setGraphicsEffect(None) if widget.graphicsEffect() else None)
+        except Exception:
+            widget.setGraphicsEffect(None)
+
     def _build_single_tab(self):
         widget = QWidget()
+        widget.setObjectName("Card")
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
+        # Header
+        header = QVBoxLayout()
+        title = QLabel("单视频 / 图集下载")
+        title.setObjectName("Title")
+        hint = QLabel("粘贴抖音分享链接，支持 video、note 以及用户主页 modal_id 弹窗链接")
+        hint.setObjectName("Hint")
+        header.addWidget(title)
+        header.addWidget(hint)
+        layout.addLayout(header)
+
+        # Input row
         row = QHBoxLayout()
+        row.setSpacing(12)
         self.single_input = QLineEdit()
-        self.single_input.setPlaceholderText("输入单个视频分享链接")
+        self.single_input.setPlaceholderText("https://v.douyin.com/xxxxx 或 https://www.douyin.com/video/xxxxx")
+        self.single_input.setMinimumHeight(42)
+
         self.single_parse_btn = QPushButton("解析")
+        self.single_parse_btn.setObjectName("Primary")
+        self.single_parse_btn.setMinimumHeight(42)
+        self.single_parse_btn.setCursor(Qt.PointingHandCursor)
+
+        self.single_clear_btn = QPushButton("清空")
+        self.single_clear_btn.setMinimumHeight(42)
+        self.single_clear_btn.setCursor(Qt.PointingHandCursor)
+
         self.single_download_btn = QPushButton("下载到默认目录")
+        self.single_download_btn.setObjectName("Accent")
         self.single_download_btn.setEnabled(False)
-        row.addWidget(self.single_input)
-        row.addWidget(self.single_parse_btn)
-        row.addWidget(self.single_download_btn)
+        self.single_download_btn.setMinimumHeight(42)
+        self.single_download_btn.setCursor(Qt.PointingHandCursor)
+
+        self.single_open_dir_btn = QPushButton("打开文件夹")
+        self.single_open_dir_btn.setMinimumHeight(42)
+        self.single_open_dir_btn.setCursor(Qt.PointingHandCursor)
+
+        # 复制无水印直链（仅视频解析出直链时显示）
+        self.single_copy_btn = QPushButton("复制链接")
+        self.single_copy_btn.setMinimumHeight(42)
+        self.single_copy_btn.setCursor(Qt.PointingHandCursor)
+        self.single_copy_btn.setVisible(False)
+
+        row.addWidget(self.single_input, 4)
+        row.addWidget(self.single_parse_btn, 1)
+        row.addWidget(self.single_clear_btn, 1)
+        row.addWidget(self.single_download_btn, 1)
+        row.addWidget(self.single_open_dir_btn, 1)
+        row.addWidget(self.single_copy_btn, 1)
+
+        # Preview + info cards
+        content_row = QHBoxLayout()
+        content_row.setSpacing(18)
+
+        cover_card = QWidget()
+        cover_card.setObjectName("Card")
+        cover_layout = QVBoxLayout(cover_card)
+        cover_layout.setContentsMargins(12, 12, 12, 12)
+        cover_layout.setSpacing(12)
 
         self.single_cover = QLabel("封面预览")
         self.single_cover.setFixedSize(520, 300)
         self.single_cover.setAlignment(Qt.AlignCenter)
-        self.single_cover.setStyleSheet("background: #1b1f2a; border-radius: 8px;")
+        self.single_cover.setStyleSheet(
+            "background: #121520; border-radius: 10px; color: #7c869b; font-size: 16px;"
+        )
+        cover_layout.addWidget(self.single_cover)
 
-        self.single_info = QLabel()
+        content_row.addWidget(cover_card, 2)
+
+        info_card = QWidget()
+        info_card.setObjectName("Card")
+        info_layout = QVBoxLayout(info_card)
+        info_layout.setContentsMargins(18, 18, 18, 18)
+        info_title = QLabel("解析结果")
+        info_title.setObjectName("Title")
+        info_layout.addWidget(info_title)
+        self.single_info = QLabel("等待解析…")
         self.single_info.setWordWrap(True)
+        self.single_info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        info_layout.addWidget(self.single_info)
+        info_layout.addStretch(1)
+        content_row.addWidget(info_card, 3)
 
-        info_row = QHBoxLayout()
-        info_row.addWidget(self.single_cover, 2)
-        info_row.addWidget(self.single_info, 3)
-
+        # Progress
         self.single_loading = QProgressBar()
         self.single_loading.setRange(0, 0)
         self.single_loading.setVisible(False)
+        self.single_loading.setTextVisible(False)
 
         self.single_progress = QProgressBar()
         self.single_progress.setRange(0, 100)
         self.single_progress.setVisible(False)
 
         layout.addLayout(row)
-        layout.addLayout(info_row)
+        layout.addLayout(content_row)
+
+        # 图集缩略图：从封面卡片下方移到页面通栏，宽度随窗口，不被封面卡片挤窄
+        thumb_card = QWidget()
+        thumb_card.setObjectName("Card")
+        thumb_layout = QVBoxLayout(thumb_card)
+        thumb_layout.setContentsMargins(12, 12, 12, 12)
+        thumb_layout.setSpacing(10)
+
+        thumb_header = QLabel("缩略图")
+        thumb_header.setObjectName("Label")
+        thumb_layout.addWidget(thumb_header)
+
+        self.thumbnail_scroll = QScrollArea()
+        self.thumbnail_scroll.setWidgetResizable(True)
+        self.thumbnail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.thumbnail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # 104px 缩略图 + 上下边距 + 水平滚动条，必须留足空间，避免底部被滚动条遮住。
+        self.thumbnail_scroll.setMinimumHeight(180)
+        self.thumbnail_scroll.setMaximumHeight(220)
+        self.thumbnail_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.thumbnail_scroll.setVisible(False)
+
+        self.thumbnails_container = QWidget()
+        self.thumbnails_layout = QHBoxLayout(self.thumbnails_container)
+        self.thumbnails_layout.setSpacing(10)
+        # 底部边距加大，避免缩略图贴着滚动条下沿
+        self.thumbnails_layout.setContentsMargins(8, 8, 8, 12)
+        self.thumbnail_scroll.setWidget(self.thumbnails_container)
+
+        thumb_layout.addWidget(self.thumbnail_scroll)
+        layout.addWidget(thumb_card)
+
         layout.addWidget(self.single_loading)
         layout.addWidget(self.single_progress)
         layout.addStretch(1)
 
         self.single_parse_btn.clicked.connect(self._on_single_parse)
+        self.single_clear_btn.clicked.connect(self._on_single_clear)
         self.single_download_btn.clicked.connect(self._on_single_download)
+        self.single_open_dir_btn.clicked.connect(self._on_single_open_dir)
+        self.single_copy_btn.clicked.connect(self._on_single_copy)
         return widget
 
     def _build_user_tab(self):
         widget = QWidget()
+        widget.setObjectName("Card")
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
+
+        header = QVBoxLayout()
+        title = QLabel("主页 / 视频批量解析")
+        title.setObjectName("Title")
+        hint = QLabel("粘贴抖音用户主页或视频合集链接，批量解析后勾选下载")
+        hint.setObjectName("Hint")
+        header.addWidget(title)
+        header.addWidget(hint)
+        layout.addLayout(header)
 
         row = QHBoxLayout()
+        row.setSpacing(12)
         self.user_input = QLineEdit()
-        self.user_input.setPlaceholderText("输入用户主页或视频链接")
+        self.user_input.setPlaceholderText("https://www.douyin.com/user/xxx 或视频合集链接")
+        self.user_input.setMinimumHeight(42)
         self.user_max_pages = QSpinBox()
         self.user_max_pages.setRange(1, 50)
         self.user_max_pages.setValue(1)
+        self.user_max_pages.setMinimumHeight(42)
         self.user_parse_btn = QPushButton("解析")
+        self.user_parse_btn.setObjectName("Primary")
+        self.user_parse_btn.setMinimumHeight(42)
+        self.user_parse_btn.setCursor(Qt.PointingHandCursor)
         self.user_select_all_btn = QPushButton("全选")
+        self.user_select_all_btn.setMinimumHeight(42)
+        self.user_select_all_btn.setCursor(Qt.PointingHandCursor)
         self.user_clear_all_btn = QPushButton("全不选")
+        self.user_clear_all_btn.setMinimumHeight(42)
+        self.user_clear_all_btn.setCursor(Qt.PointingHandCursor)
         self.user_download_btn = QPushButton("下载勾选(默认目录)")
+        self.user_download_btn.setObjectName("Accent")
+        self.user_download_btn.setMinimumHeight(42)
+        self.user_download_btn.setCursor(Qt.PointingHandCursor)
         self.user_download_btn.setEnabled(False)
 
-        row.addWidget(self.user_input)
-        row.addWidget(QLabel("max_pages"))
-        row.addWidget(self.user_max_pages)
-        row.addWidget(self.user_parse_btn)
-        row.addWidget(self.user_select_all_btn)
-        row.addWidget(self.user_clear_all_btn)
-        row.addWidget(self.user_download_btn)
+        row.addWidget(self.user_input, 4)
+        pages_label = QLabel("页数上限")
+        pages_label.setObjectName("Label")
+        row.addWidget(pages_label, 0)
+        row.addWidget(self.user_max_pages, 0)
+        row.addWidget(self.user_parse_btn, 1)
+        row.addWidget(self.user_select_all_btn, 1)
+        row.addWidget(self.user_clear_all_btn, 1)
+        row.addWidget(self.user_download_btn, 1)
 
         self.user_table = self._build_table()
         self.user_loading = QProgressBar()
         self.user_loading.setRange(0, 0)
         self.user_loading.setVisible(False)
+        self.user_loading.setTextVisible(False)
         self.user_progress = QProgressBar()
         self.user_progress.setRange(0, 100)
         self.user_progress.setVisible(False)
@@ -905,39 +1257,84 @@ class MainWindow(QMainWindow):
 
     def _build_config_tab(self):
         widget = QWidget()
+        widget.setObjectName("Card")
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
-        action_row = QHBoxLayout()
+        header = QVBoxLayout()
+        title = QLabel("登录态与存储设置")
+        title.setObjectName("Title")
+        hint = QLabel("扫码获取抖音登录 Cookie，并设置文件默认保存目录")
+        hint.setObjectName("Hint")
+        header.addWidget(title)
+        header.addWidget(hint)
+        layout.addLayout(header)
+
+        # Cookie 区域：二维码卡片 + 操作侧栏
+        cookie_row = QHBoxLayout()
+        cookie_row.setSpacing(20)
+        qr_card = QWidget()
+        qr_card.setObjectName("Card")
+        qr_layout = QVBoxLayout(qr_card)
+        qr_layout.setContentsMargins(16, 16, 16, 16)
+        qr_layout.setAlignment(Qt.AlignCenter)
+        self.cookie_qr = QLabel("二维码预览")
+        self.cookie_qr.setFixedSize(240, 240)
+        self.cookie_qr.setAlignment(Qt.AlignCenter)
+        self.cookie_qr.setStyleSheet(
+            "background: #0f1115; border-radius: 10px; color: #7c869b; font-size: 14px;"
+        )
+        qr_layout.addWidget(self.cookie_qr)
+        cookie_row.addWidget(qr_card)
+
+        cookie_side = QVBoxLayout()
+        cookie_side.setSpacing(12)
         self.cookie_status = QLabel("状态：未获取")
+        self.cookie_status.setObjectName("Label")
         get_cookie_btn = QPushButton("获取Cookie")
-        action_row.addWidget(get_cookie_btn)
-        action_row.addWidget(self.cookie_status)
-        action_row.addStretch(1)
+        get_cookie_btn.setObjectName("Primary")
+        get_cookie_btn.setMinimumHeight(42)
+        get_cookie_btn.setCursor(Qt.PointingHandCursor)
+        paste_tip = QLabel("点击后在弹窗中用抖音 App 扫码登录，Cookie 将自动保存")
+        paste_tip.setObjectName("Hint")
+        cookie_side.addWidget(self.cookie_status)
+        cookie_side.addWidget(get_cookie_btn)
+        cookie_side.addWidget(paste_tip)
+        cookie_side.addStretch(1)
+        cookie_row.addLayout(cookie_side, 1)
+        layout.addLayout(cookie_row)
 
+        # Cookie 文本框
+        cookie_label = QLabel("Cookie（高级：可手动粘贴）")
+        cookie_label.setObjectName("Label")
+        layout.addWidget(cookie_label)
         self.cookie_editor = QPlainTextEdit()
         self.cookie_editor.setPlaceholderText("粘贴抖音 Cookie")
         self.cookie_editor.setPlainText(self.config.get("cookie", ""))
+        self.cookie_editor.setMinimumHeight(90)
+        layout.addWidget(self.cookie_editor)
 
-        self.cookie_qr = QLabel("二维码预览")
-        self.cookie_qr.setFixedSize(260, 260)
-        self.cookie_qr.setAlignment(Qt.AlignCenter)
-        self.cookie_qr.setStyleSheet("background: #1b1f2a; border-radius: 8px;")
-
+        # 保存路径
+        path_label = QLabel("保存路径")
+        path_label.setObjectName("Label")
+        layout.addWidget(path_label)
         path_row = QHBoxLayout()
+        path_row.setSpacing(12)
         self.save_path_input = QLineEdit()
         self.save_path_input.setText(self.save_dir)
         browse_btn = QPushButton("选择目录")
+        browse_btn.setMinimumHeight(42)
+        browse_btn.setCursor(Qt.PointingHandCursor)
         save_btn = QPushButton("保存配置")
-        path_row.addWidget(self.save_path_input)
-        path_row.addWidget(browse_btn)
-        path_row.addWidget(save_btn)
-
-        layout.addLayout(action_row)
-        layout.addWidget(self.cookie_qr)
-        layout.addWidget(QLabel("Cookie"))
-        layout.addWidget(self.cookie_editor)
-        layout.addWidget(QLabel("保存路径"))
+        save_btn.setObjectName("Primary")
+        save_btn.setMinimumHeight(42)
+        save_btn.setCursor(Qt.PointingHandCursor)
+        path_row.addWidget(self.save_path_input, 1)
+        path_row.addWidget(browse_btn, 0)
+        path_row.addWidget(save_btn, 0)
         layout.addLayout(path_row)
+
         layout.addStretch(1)
 
         if DISABLE_LOGIN:
@@ -968,7 +1365,16 @@ class MainWindow(QMainWindow):
         url = self.single_input.text().strip()
         if not url:
             return
+        if not self.parser.cookie:
+            QMessageBox.warning(
+                self,
+                "Cookie 未配置",
+                "尚未获取抖音 Cookie，请先点击「获取Cookie」按钮扫码登录。\n"
+                "登录成功后会自动保存，之后即可解析和下载。",
+            )
+            return
         self.single_parse_btn.setEnabled(False)
+        self.single_clear_btn.setEnabled(False)
         self.single_download_btn.setEnabled(False)
         self.single_loading.setVisible(True)
         self.single_info.setText("解析中...")
@@ -979,49 +1385,186 @@ class MainWindow(QMainWindow):
         self.single_worker.finished.connect(self._single_parse_done)
         self.single_worker.start()
 
+    def _on_single_clear(self):
+        self.single_input.clear()
+        self.single_cover.setText("封面预览")
+        self.single_cover.setPixmap(QPixmap())
+        self.single_info.setText("")
+        self.single_progress.setVisible(False)
+        self.single_download_btn.setEnabled(False)
+        self.current_single_info = None
+        self._clear_thumbnails()
+        self.thumbnail_scroll.setVisible(False)
+        self.single_copy_btn.setText("复制链接")
+        self._set_copy_btn(False, None)
+
+    def _clear_thumbnails(self):
+        """停止缩略图下载线程并清空缩略图容器。"""
+        if self.thumbnail_worker is not None:
+            try:
+                self.thumbnail_worker.loaded.disconnect()
+                self.thumbnail_worker.error.disconnect()
+            except Exception:
+                pass
+            if self.thumbnail_worker.isRunning():
+                self.thumbnail_worker.requestInterruption()
+                self.thumbnail_worker.quit()
+                self.thumbnail_worker.wait(2000)
+            self.thumbnail_worker = None
+        layout = self.thumbnails_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            wgt = item.widget()
+            if wgt is not None:
+                wgt.deleteLater()
+        self.thumbnail_scroll.setVisible(False)
+
+    def _show_thumbnails(self, urls):
+        """异步加载图集缩略图，逐张塞进横向滚动条。"""
+        self._clear_thumbnails()
+        if not urls:
+            return
+        self.thumbnail_scroll.setVisible(True)
+        self.thumbnail_worker = ThumbnailWorker(urls)
+        self.thumbnail_worker.loaded.connect(self._on_thumbnail_loaded)
+        self.thumbnail_worker.error.connect(lambda _e: None)
+        self.thumbnail_worker.start()
+
+    def _on_thumbnail_loaded(self, idx, pixmap, url):
+        label = ClickableLabel()
+        label.setFixedSize(104, 104)
+        label.setAlignment(Qt.AlignCenter)
+        label.setPixmap(pixmap)
+        label.setCursor(Qt.PointingHandCursor)
+        label.setStyleSheet(
+            "background:#121520; border:2px solid transparent; border-radius:8px;"
+        )
+        label.setToolTip("点击查看大图")
+        label.clicked.connect(
+            lambda: self._set_cover(self.single_cover, url, 520, 300)
+        )
+        self.thumbnails_layout.addWidget(label)
+
+    def _on_single_open_dir(self):
+        try:
+            os.makedirs(self.save_dir, exist_ok=True)
+            os.startfile(self.save_dir)
+        except Exception as e:
+            QMessageBox.warning(self, "打开文件夹失败", f"无法打开保存目录：\n{str(e)}")
+
+    def _set_copy_btn(self, show: bool, url):
+        """视频有直链时才显示「复制链接」按钮，并把地址挂在按钮上。"""
+        self.single_copy_btn.setVisible(bool(show))
+        self.single_copy_btn.setProperty("nwm_url", url)
+
+    def _on_single_copy(self):
+        url = (
+            self.single_copy_btn.property("nwm_url")
+            or self.single_download_btn.property("nwm_url")
+        )
+        if not url:
+            QMessageBox.information(self, "复制链接", "当前没有可复制的无水印直链")
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(url)
+        self.single_copy_btn.setText("已复制 ✓")
+        QTimer.singleShot(1500, lambda: self.single_copy_btn.setText("复制链接"))
+
     def _single_parse_done(self):
         self.single_loading.setVisible(False)
         self.single_parse_btn.setEnabled(True)
+        self.single_clear_btn.setEnabled(True)
 
     def _single_result(self, info: dict):
         content_type = info.get("content_type", "video")
-        
-        info_text = (
-            f"ID: {info.get('aweme_id')}\n"
-            f"类型: {'图集' if content_type == 'image' else '视频'}\n"
-            f"时间: {format_time(info.get('create_time'))}\n"
-            f"作者: {info.get('author_nickname')}\n"
-            f"文案: {info.get('desc')}\n"
-            f"封面: {info.get('cover_url')}\n"
+        ctype = "图集" if content_type == "image" else "视频"
+
+        # --- 基础信息表 ---
+        rows = [
+            ("ID", info.get("aweme_id") or "-", True),
+            ("类型", ctype, False),
+            ("时间", format_time(info.get("create_time")) or "-", False),
+            ("作者", info.get("author_nickname") or "-", False),
+        ]
+        dur = fmt_duration(info.get("duration")) if content_type == "video" else None
+        if dur:
+            rows.append(("时长", dur, False))
+        html = _kv_table(rows)
+
+        # --- 文案（选题最关心的内容）---
+        desc = info.get("desc") or "-"
+        html += (
+            f"<div style='margin-top:14px; color:#7c869b; font-size:12px;'>文案</div>"
+            f"<div style='margin-top:5px; color:#e6e6e6; background:#1b2030; "
+            f"border-radius:8px; padding:10px 12px;'>{_esc(desc)}</div>"
         )
-        
+
+        # --- 互动数据（点赞/评论/分享/收藏）---
+        stats = [
+            ("点赞", fmt_count(info.get("digg_count"))),
+            ("评论", fmt_count(info.get("comment_count"))),
+            ("分享", fmt_count(info.get("share_count"))),
+            ("收藏", fmt_count(info.get("collect_count"))),
+        ]
+        if any(v != "-" for _, v in stats):
+            html += (
+                f"<div style='margin-top:14px; color:#7c869b; font-size:12px;'>互动数据</div>"
+                f"<div style='margin-top:6px;'>{_stat_tiles(stats)}</div>"
+            )
+
         if content_type == "video":
             qualities = info.get("qualities", [])
-            qualities_text = ""
+            nwm = info.get("nwm_url")
+            q_text = ""
             if qualities:
-                qualities_text = "\n可用质量: " + ", ".join([q.get("quality_label", q.get("ratio", "未知")) for q in qualities[:3]])
-            info_text += f"无水印: {info.get('nwm_url')}" + qualities_text
-            self.single_download_btn.setEnabled(bool(info.get("nwm_url") or qualities))
-            self.single_download_btn.setProperty("nwm_url", info.get("nwm_url"))
+                q_text = "，".join([q.get("quality_label", q.get("ratio", "未知")) for q in qualities[:4]])
+            html += (
+                f"<div style='margin-top:14px;'><span style='color:#7c869b;'>无水印</span> "
+                f"<span style='color:#22d3ee;'>✓ 已就绪</span></div>"
+            )
+            if q_text:
+                html += (
+                    f"<div style='margin-top:6px; color:#7c869b; font-size:12px;'>清晰度</div>"
+                    f"<div style='margin-top:2px; color:#e6e6e6;'>{_esc(q_text)}</div>"
+                )
+            if nwm:
+                html += (
+                    f"<div style='margin-top:6px; color:#7c869b; font-size:12px;'>"
+                    f"无水印直链（可点右侧「复制链接」）</div>"
+                    f"<div style='margin-top:2px; color:#9fb3c8; "
+                    f"font-family:Consolas,\"Courier New\",monospace; font-size:12px; "
+                    f"background:#1b2030; border-radius:8px; padding:8px 10px;'>{_esc(nwm)}</div>"
+                )
+            self.single_download_btn.setEnabled(bool(nwm or qualities))
+            self.single_download_btn.setProperty("nwm_url", nwm)
             self.single_download_btn.setProperty("qualities", qualities)
+            self._set_copy_btn(bool(nwm), nwm)
         elif content_type == "image":
             image_count = info.get("image_count", 0)
-            image_data = info.get("image_data", {})
+            image_data = info.get("image_data", {}) or {}
             image_urls = image_data.get("image_urls", []) if image_data else []
-            info_text += f"图片数量: {image_count}张"
+            html += (
+                f"<div style='margin-top:14px;'><span style='color:#7c869b;'>图片</span> "
+                f"<span style='color:#22d3ee;'>✓ 共 {image_count} 张</span></div>"
+            )
             self.single_download_btn.setEnabled(bool(image_urls))
             self.single_download_btn.setProperty("image_data", image_data)
-        
-        self.single_info.setText(info_text)
+            self._set_copy_btn(False, None)
+            if image_urls:
+                self._show_thumbnails(image_urls)
+
+        self.single_info.setText(html)
         self.single_download_btn.setProperty("content_type", content_type)
         self.single_download_btn.setProperty("desc", info.get("desc"))
         self.single_download_btn.setProperty("aweme_id", info.get("aweme_id"))
         cover_url = info.get("cover_url")
         if cover_url:
             self._set_cover(self.single_cover, cover_url, 520, 300)
+        self._fade_in(self.single_info)
 
     def _single_error(self, msg: str):
-        self.single_info.setText(msg)
+        self.single_info.setText(f"<span style='color:#ef4444;'>{_esc(msg)}</span>")
 
     def _on_single_download(self):
         content_type = self.single_download_btn.property("content_type") or "video"
@@ -1144,6 +1687,14 @@ class MainWindow(QMainWindow):
     def _on_user_parse(self):
         url = self.user_input.text().strip()
         if not url:
+            return
+        if not self.parser.cookie:
+            QMessageBox.warning(
+                self,
+                "Cookie 未配置",
+                "尚未获取抖音 Cookie，请先点击「获取Cookie」按钮扫码登录。\n"
+                "登录成功后会自动保存，之后即可解析和下载。",
+            )
             return
         self.user_parse_btn.setEnabled(False)
         self.user_download_btn.setEnabled(False)
@@ -1321,6 +1872,21 @@ class MainWindow(QMainWindow):
         if DISABLE_LOGIN:
             QMessageBox.information(self, "提示", "精简版不支持自动获取Cookie")
             return
+        ok, detail = _browser_available()
+        if not ok:
+            QMessageBox.information(
+                self, "精简版提示",
+                "当前为【精简版】，未内置浏览器内核，无法扫码登录。\n\n"
+                "请手动获取 Cookie（只需做一次）：\n"
+                "1. 用浏览器打开 douyin.com 并登录\n"
+                "2. 按 F12 打开开发者工具 → 应用(Application)\n"
+                "   → Cookie → https://www.douyin.com\n"
+                "3. 复制整条 cookie 值\n"
+                "4. 粘贴到下方 Cookie 输入框 → 点「保存配置」\n\n"
+                "需要扫码登录的便捷方式请下载完整版。\n\n"
+                f"（技术信息：{detail}）"
+            )
+            return
         self.cookie_status.setText("状态：获取中...")
         self.cookie_qr.clear()
         self.cookie_qr.setText("启动浏览器...")
@@ -1354,13 +1920,156 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Cookie", msg)
 
 
+DIALOG_STYLE = """
+QWidget { background: #0f1115; color: #e6e6e6; font-size: 14px;
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif; }
+QLabel#Title { font-size: 19px; font-weight: bold; color: #f5f7fa; }
+QLabel#Hint { font-size: 12px; color: #7c869b; }
+QLabel#Label { font-size: 12px; color: #7c869b; }
+QLineEdit { background: #1b1f2a; border: 1px solid #2b3142; padding: 10px 13px;
+    border-radius: 9px; color: #e6e6e6; }
+QLineEdit:focus { border: 1px solid #3b82f6; }
+QPushButton { background: #2b3142; border: none; padding: 10px 16px;
+    border-radius: 9px; color: #d6dbe6; }
+QPushButton:hover { background: #343c52; }
+QPushButton#Primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+    stop:0 #3b82f6, stop:1 #2563eb); color: #ffffff; font-weight: bold; }
+QLabel#Plan { font-size: 12px; color: #9aa5bd; background: #151a24;
+    border: 1px solid #232a38; border-radius: 9px; padding: 10px 12px; }
+QLabel#Warn { font-size: 12px; color: #f0a35e; }
+"""
+
+
+def _plan_menu_text() -> str:
+    """四档套餐说明，供激活窗口展示。"""
+    parts = []
+    for key in ("M", "H", "Y", "L"):
+        name, days, price = activation.PLANS[key]
+        dur = "永久有效" if days is None else f"{days} 天"
+        parts.append(f"{name} {price} / {dur}")
+    return "  ·  ".join(parts)
+
+
+class ActivationDialog(QDialog):
+    """首次启动的激活窗口：展示机器码、套餐价目，收取并校验激活码。"""
+
+    def __init__(self, parent=None, expired_msg: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("软件激活 · 授权已到期" if expired_msg else "软件激活")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setStyleSheet(DIALOG_STYLE)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(14)
+
+        title = QLabel("授权已到期，请续费" if expired_msg else "需要激活才能使用")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
+        if expired_msg:
+            warn = QLabel(expired_msg)
+            warn.setObjectName("Warn")
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+
+        hint = QLabel("把下方【本机机器码】发给作者，拿到激活码后填入并点击「激活」。")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        plan = QLabel(_plan_menu_text())
+        plan.setObjectName("Plan")
+        plan.setWordWrap(True)
+        layout.addWidget(plan)
+
+        mid_label = QLabel("本机机器码")
+        mid_label.setObjectName("Label")
+        layout.addWidget(mid_label)
+
+        self.machine_id = activation.get_machine_id()
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(10)
+        self.mid_edit = QLineEdit(self.machine_id)
+        self.mid_edit.setReadOnly(True)
+        self.mid_edit.setMinimumHeight(42)
+        copy_btn = QPushButton("复制")
+        copy_btn.setMinimumHeight(42)
+        copy_btn.setCursor(Qt.PointingHandCursor)
+        copy_btn.clicked.connect(self._copy_mid)
+        mid_row.addWidget(self.mid_edit, 4)
+        mid_row.addWidget(copy_btn, 1)
+        layout.addLayout(mid_row)
+
+        code_label = QLabel("激活码")
+        code_label.setObjectName("Label")
+        layout.addWidget(code_label)
+
+        self.code_edit = QLineEdit()
+        self.code_edit.setPlaceholderText("XXXX-XXXX-XXXX-XXXX-XXX")
+        self.code_edit.setMinimumHeight(42)
+        layout.addWidget(self.code_edit)
+
+        buttons = QDialogButtonBox()
+        ok_btn = buttons.addButton("激活", QDialogButtonBox.AcceptRole)
+        ok_btn.setObjectName("Primary")
+        exit_btn = buttons.addButton("退出", QDialogButtonBox.RejectRole)
+        ok_btn.setMinimumHeight(42)
+        exit_btn.setMinimumHeight(42)
+        buttons.accepted.connect(self._try_activate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _copy_mid(self):
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(self.machine_id)
+
+    def _try_activate(self):
+        code = self.code_edit.text().strip()
+        if not code:
+            QMessageBox.warning(self, "激活", "请先填入激活码")
+            return
+        ok, label, msg = activation.verify_detail(self.machine_id, code)
+        if not ok:
+            QMessageBox.warning(
+                self, "激活失败",
+                f"{msg}\n\n请确认：\n"
+                "1. 激活码与本机机器码匹配（换机器需重新获取）\n"
+                "2. 复制完整（去掉横线共 19 位），未漏字符"
+            )
+            return
+        if activation.save_license(code):
+            expiry = activation.expiry_of(self.machine_id, code)
+            QMessageBox.information(
+                self, "激活成功",
+                f"已激活【{label}】\n有效期至：{expiry}\n\n感谢使用！"
+            )
+            self.accept()
+        else:
+            QMessageBox.warning(self, "激活失败", "无法写入激活文件，请检查目录权限。")
+
+
 def main():
     app = QApplication([])
+    # 未激活或已过期则先弹激活窗口，取消/失败即退出，不进入主界面
+    if not activation.is_activated():
+        expired_msg = ""
+        saved = activation.read_saved_code()
+        if saved:
+            ok, _label, msg = activation.verify_detail(activation.get_machine_id(), saved)
+            if not ok:
+                expired_msg = msg
+        dlg = ActivationDialog(expired_msg=expired_msg)
+        if dlg.exec() != QDialog.Accepted:
+            return 0
     window = MainWindow()
     window.show()
     app.exec()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 

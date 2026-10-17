@@ -1,0 +1,62 @@
+抖音无水印解析器 · 源码可用性许可（Source-Available License）
+
+版权所有 (c) 2026 hrkfwq007
+
+本仓库的代码**公开供阅读、学习与个人非商业用途使用**，但**不是开源软件**，
+未授予任何开源许可证（MIT / Apache / GPL 等均不适用）。
+
+## 你被允许
+
+1. 阅读、学习本项目的实现思路与代码结构。
+2. 为个人学习、研究目的在本地运行与修改代码。
+3. 提交 Issue 反馈缺陷，或提交 Pull Request 改进代码（提交即表示同意本许可条款）。
+
+## 你不被允许（未经书面授权）
+
+1. **去除、绕过或破解软件中的激活校验机制**，或生成、传播激活码。
+2. 将本软件或其**编译产物**用于任何形式的**商业分发、转售、二次售卖**，
+   包括但不限于打包后售卖、作为增值服务提供、上传到应用市场或网盘牟利。
+3. 删除或修改本软件中的版权、署名与授权标识。
+4. 将本软件整体或其编译产物以任何开源许可证重新发布。
+
+如需商业授权、二次开发授权或 OEM 合作，请联系仓库所有者。
+
+## 激活模块
+
+仓库**不包含**真实激活私钥，仅提供 `activation.example.py`（私钥为占位值）。
+自行编译须先替换为自己的强随机私钥：
+
+```bash
+cp activation.example.py activation.py
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # 用输出替换 SECRET
+```
+
+预编译的 Windows 可执行程序为付费授权商品，购买后获得激活码：
+https://douyin-parser-42948.app.workbuddy.host/
+
+## 第三方代码
+
+- 本项目在 [DLWangSan/douyin_parse](https://github.com/DLWangSan/douyin_parse)
+  （同步版本 `0896c74`）之上二次开发。该上游仓库未声明开源许可证，
+  其代码的著作权归原作者所有；本许可仅针对本项目新增与修改的部分，
+  不主张对上游代码的权利，也不影响上游作者依法享有的权利。
+- `xbogus.py`：基于 Evil0ctal/Douyin_TikTok_Download_API（Apache-2.0）修改。
+- `abogus.py`：基于 Evil0ctal/Douyin_TikTok_Download_API 中的实现修改，
+  其原始实现来自 JoeanAmier/TikTokDownloader（GPL-3.0）。
+  该部分沿用其上游许可，本许可不影响上游许可对该部分代码的适用。
+
+上述第三方代码按原样提供，本项目不对抖音接口变更导致的失效负责。
+
+## 免责声明
+
+本软件按"原样"提供，不作任何明示或默示的担保。使用者应遵守所在地法律法规
+及抖音平台的用户协议，仅下载本人有权使用的内容，因使用本软件产生的任何
+法律责任由使用者自行承担。
+
+---
+
+English summary: This repository is source-available, NOT open source.
+Reading, learning and personal non-commercial use are permitted.
+Removing or circumventing the activation mechanism, generating or distributing
+license keys, and any commercial redistribution or resale of the software or its
+compiled binaries are prohibited without written permission.

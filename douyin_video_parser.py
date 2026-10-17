@@ -95,6 +95,7 @@ class DouyinVideoParser:
             r'video_id=(\d+)',
             r'aweme_id=(\d+)',
             r'note_id=(\d+)',
+            r'modal_id=(\d+)',  # 用户主页弹窗视频链接
         ]
         for pattern in patterns:
             match = re.search(pattern, extracted_url)
@@ -131,6 +132,7 @@ class DouyinVideoParser:
                 r'aweme_id=(\d+)',
                 r'video_id=(\d+)',
                 r'note_id=(\d+)',
+                r'modal_id=(\d+)',  # 用户主页弹窗视频链接
             ]
             for pattern in id_patterns:
                 match = re.search(pattern, html_content)
@@ -155,9 +157,15 @@ class DouyinVideoParser:
             "Sec-Fetch-Site": "same-site",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Dest": "empty",
+            # 抖音边缘网关 ArgusSecurityPlugin 要求该请求头；当前网关不校验取值。
+            "x-tt-argus": "1",
         }
         if self.cookie:
             headers["Cookie"] = self.cookie
+            # 从 Cookie 中提取 UIFID 并单独带上 uifid 头，避免 "Uifid Not Found"
+            uifid_match = re.search(r"UIFID=([^;]+)", self.cookie)
+            if uifid_match:
+                headers["uifid"] = uifid_match.group(1)
         return headers
 
     def _sign_abogus_url(self, base_url: str, params: dict) -> str | None:
@@ -573,6 +581,9 @@ class DouyinVideoParser:
         # Determine content type
         content_type = DouyinVideoParser.get_content_type(data)
         
+        # 互动数据（选题价值核心：点赞/评论/分享/收藏）
+        statistics = aweme.get("statistics") or {}
+
         meta = {
             "aweme_id": aweme.get("aweme_id"),
             "desc": aweme.get("desc"),
@@ -581,7 +592,16 @@ class DouyinVideoParser:
             "author_sec_uid": author.get("sec_uid"),
             "cover_url": cover_list[0] if cover_list else None,
             "content_type": content_type,
+            # 互动指标
+            "digg_count": statistics.get("digg_count"),
+            "comment_count": statistics.get("comment_count"),
+            "share_count": statistics.get("share_count"),
+            "collect_count": statistics.get("collect_count"),
         }
+
+        # 视频时长（毫秒）；图集无 duration 概念
+        if content_type == "video":
+            meta["duration"] = video.get("duration")
         
         # Add image data for albums
         if content_type == "image":
