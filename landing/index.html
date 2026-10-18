@@ -410,7 +410,8 @@ a{color:inherit;text-decoration:none}
   <section class="section" id="compare">
     <div class="section-head reveal">
       <h2>两个版本，功能一样</h2>
-      <p class="muted">唯一区别是"要不要扫码登录"。精简版体积小了 76%，下载更快、分发更省。</p>
+      <p class="muted">功能完全一致，连扫码登录都有。精简版只是借你电脑里已有的 Edge / Chrome，
+        不另装 719MB 浏览器内核，体积小了 76%。</p>
     </div>
     <div class="reveal">
       <p class="bignum">223MB<small>精简版体积 · 完整版 944MB</small></p>
@@ -423,7 +424,7 @@ a{color:inherit;text-decoration:none}
           <tr><td>互动数据（赞/评/转/藏）</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><td>图集缩略图预览</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><td>主页批量解析</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Cookie 获取方式</td><td class="num">手动填写（附引导）</td><td class="num">扫码自动登录</td></tr>
+          <tr><td>抖音登录方式</td><td class="num">扫码（借系统 Edge/Chrome）</td><td class="num">扫码（自带内核）</td></tr>
           <tr><td>下载体积</td><td class="num">223 MB</td><td class="num">944 MB</td></tr>
           <tr><td>首次安装耗时</td><td class="num">约 1 分钟</td><td class="num">约 5 分钟</td></tr>
         </tbody>
@@ -561,8 +562,12 @@ a{color:inherit;text-decoration:none}
         <p>没有区别，四档功能完全一致，都包含单视频、图集、主页批量解析与互动数据。差别只在有效期长短，用得久就选长档更划算。</p>
       </details>
       <details>
-        <summary>Cookie 是什么，必须填吗？</summary>
-        <p>部分内容需要抖音登录态才能取到完整数据。精简版在软件内有图文引导，按 F12 复制一次即可，之后自动保存。完整版支持扫码自动登录。</p>
+        <summary>要登录抖音账号吗？扫码安全吗？</summary>
+        <p>要的，这是抖音接口的要求：不登录拿不到作品数据。两个版本都是点一下「获取Cookie」
+           扫码即可，<strong>不需要手动去浏览器按 F12 复制</strong>，也不用输入账号密码。
+           扫码登录一次，登录态存在本机，以后打开就能直接用。<br>
+           精简版借用你电脑里已有的 Edge 或 Chrome 完成扫码（Win10/11 自带 Edge），完整版自带浏览器内核。
+           整个过程只读取登录态，不碰你的私信、订单等任何其他数据。</p>
       </details>
       <details>
         <summary>能批量下载某个博主的全部视频吗？</summary>
