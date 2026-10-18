@@ -57,21 +57,46 @@ Win10 / 11 自带 Edge，绝大多数人选精简版就够了。
 
 ---
 
-## 需要手动做的事
+## 发布方式：一条命令（有 token 时）
 
-Release 附件（二进制文件）无法用命令行上传——没有可用的 API 凭据，
-`gh` 也没装。所以这一步要你在网页上做，大约 1 分钟：
+Release 附件是**二进制文件**，用 `gh` 或网页上传都行，但推荐直接跑脚本——
+GitHub 的 Releases API 是公开的、稳定的、完全合规的，不依赖 `gh` 是否安装。
+
+```bash
+# token 只从环境变量读，不落盘
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+
+python release_github.py --dry-run    # 先看要发什么
+python release_github.py              # 真的发
+```
+
+脚本会：读本文里的代码块作为 Release 正文 → 创建/复用 `v2.2` Release →
+上传附件。已有同名 Release 或附件时会先删旧的再传，**重复跑安全**。
+
+> token 权限：classic token 勾 `repo`；或 fine-grained token 给这一个仓库
+> `Contents: Read and write`。不需要其他权限。
+
+当前要传的文件：
+
+```
+release\抖音无水印解析器_v2.1_精简版_安装.exe
+61,253,001 字节（58.4 MB），md5 c8ac136c9d9a4b21b411586a74e50c5c
+```
+
+## 备选：网页手动发（没 token 时）
 
 1. 打开 <https://github.com/hrkfwq007/douyin-parser/releases/new>
 2. **Choose a tag** 里输入 `v2.2`，点「Create new tag」
 3. 标题填 `抖音无水印解析器 v2.2`
 4. 把上面那段内容粘进说明框
-5. **把安装包拖进底部的「Attach binaries」区域**：
-   ```
-   D:\workbuddys应用开发\2026-10-17-15-29-16\douyin_parse\release\抖音无水印解析器_v2.1_精简版_安装.exe
-   ```
-   （58.4 MB，md5 `f95a4b2ea49509ec4bd75ff32ee4667b`）
+5. 把上面那个 exe 拖进底部的「Attach binaries」区域
 6. 点 **Publish release**
 
 > 完整版 342MB 建议**不要**挂到 Release 上，走网盘分发。
 > 一是体积大、下载慢，二是之前实测大文件上传容易超时。
+
+## ⚠️ 关于其他四个平台
+
+知乎 / 小红书 / CSDN / B站 **没有面向个人创作者的发文 API**，
+所以不能用 token 自动发，只有 GitHub 可以。详见 `推广/推广计划.md` 第三节。
+内容平台的发布走 `推广/发布台.html`（一键复制 + 打开创作页，人做最后一步）。

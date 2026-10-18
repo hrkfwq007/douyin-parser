@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>一键发布台 · 抖音无水印解析器</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --bd:#e3e6ea; --tx:#1a1d21; --tx2:#5f6672;
+  --ac:#0084ff; --ok:#0a7d3b; --chip:#eef1f4;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#15171a;--card:#1c1f23;--bd:#2c3138;--tx:#e6e8eb;--tx2:#9aa2ad;--chip:#262b31;--ok:#3ecf8e;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);
+  font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:32px 20px 64px}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+h1{font-size:22px;margin:0;letter-spacing:-.01em}
+.sub{color:var(--tx2);font-size:13px}
+.bar{height:6px;background:var(--chip);border-radius:99px;overflow:hidden;margin:16px 0 8px}
+.bar>i{display:block;height:100%;width:0;background:var(--ok);transition:width .3s}
+.prog{color:var(--tx2);font-size:13px;margin-bottom:22px}
+.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.tabs button{background:var(--chip);border:0;color:var(--tx2);padding:7px 15px;
+  border-radius:8px;cursor:pointer;font-size:13px;font-family:inherit}
+.tabs button.on{background:var(--tx);color:var(--bg)}
+h2.week{font-size:14px;color:var(--tx2);margin:26px 0 12px;font-weight:600;
+  letter-spacing:.02em;display:flex;align-items:center;gap:10px}
+h2.week::after{content:"";flex:1;height:1px;background:var(--bd)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;
+  padding:18px 20px;margin-bottom:14px}
+.card.done{opacity:.5}
+.top{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.tag{font-size:12px;padding:2px 9px;border-radius:6px;color:#fff;font-weight:600;
+  letter-spacing:.02em}
+.tt{font-size:16px;font-weight:600;flex:1;min-width:200px}
+.n{font-size:12px;color:var(--tx2);margin-bottom:12px;padding-left:2px;
+  border-left:2px solid var(--bd);padding-left:10px}
+pre{background:var(--chip);border:1px solid var(--bd);border-radius:8px;
+  padding:12px 14px;overflow:auto;max-height:200px;font-size:13px;line-height:1.65;
+  font-family:ui-monospace,"SFMono-Regular",Consolas,"Microsoft YaHei",monospace;
+  margin:0 0 12px;white-space:pre-wrap;word-break:break-word}
+pre.open{max-height:none}
+details summary{cursor:pointer;color:var(--tx2);font-size:13px;
+  padding:4px 0;user-select:none;outline:none}
+details{margin-bottom:12px}
+.btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button.act{border:1px solid var(--bd);background:var(--card);color:var(--tx);
+  padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;font-family:inherit;
+  transition:.15s}
+button.act:hover{border-color:var(--ac);color:var(--ac)}
+button.act.pri{background:var(--ac);border-color:var(--ac);color:#fff}
+button.act.pri:hover{filter:brightness(1.08);color:#fff}
+button.act.copied{background:var(--ok);border-color:var(--ok);color:#fff}
+button.act.dn{color:var(--tx2)}
+.spacer{flex:1}
+.warn{margin-top:14px;padding:12px 14px;border-radius:8px;font-size:13px;
+  background:var(--chip);color:var(--tx2);line-height:1.7}
+.warn b{color:var(--tx)}
+footer{margin-top:34px;color:var(--tx2);font-size:12px;line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>一键发布台</h1>
+    <span class="sub">抖音无水印解析器 · 推广第 ②③ 步</span>
+  </header>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="prog" id="prog"></div>
+  <div class="tabs">
+    <button data-w="all" class="on">全部</button>
+    <button data-w="2">第 2 周</button>
+    <button data-w="3">第 3 周</button>
+  </div>
+  <div id="list"></div>
+  <footer>
+    进度保存在这台电脑的浏览器本地存储里，换浏览器会重置，不发任何数据出去。<br>
+    成稿内容改了以后，重跑 <code>python 推广/build_publish_console.py</code> 重新生成本页。
+  </footer>
+</div>
+<script>
+const ITEMS = [{"id": "zhihu-a", "platform": "知乎", "week": 2, "title": "怎么把抖音的视频下载到电脑上？", "target": "先搜索这个问题，挑关注人数最多的那个进去回答。链接放文末。", "body": "先说结论：能，而且不止一种办法，但**先想清楚你要拿它干什么**。\n\n如果是保存**你自己发的作品**（账号要迁移、本地要留档、原始素材误删），\n或者存**已经拿到授权的素材**——那下载下来完全没问题，抖音自己也提供了入口。\n\n如果是要下载**别人的视频**：视频的著作权是作者的，下载不等于可以二次发布。\n去水印后重新上传、搬运，都是明确的侵权行为，平台现在查得也很严。\n所以下面只讲**合法用途**下的做法。\n\n### 方法一：抖音自带的「保存本地」\n\n分享 → 保存本地。最省事，但带水印，且只落在手机相册里。\n适合临时存一两个，不适合批量，也不适合要在电脑上用的场景。\n\n### 方法二：手机传到电脑\n\n微信文件传输助手、QQ、数据线都行。问题有两个：\n一是画质可能被压缩，二是**视频元数据全丢了**——\n点赞、评论、收藏、转发这些数据，传过去就再也看不到了。\n如果你存素材是为了做分析，这条路等于白存。\n\n### 方法三：分享链接解析（无水印、可批量、带数据）\n\n原理不复杂：视频在抖音服务器上存的就是无水印的原文件，\n水印是播放器在播放时叠上去的一层。\n拿到分享短链，跟跳转解析出真实作品 ID，再取直链，就能拿到原文件。\n\n这条路的优势在于**顺带能把数据一起取出来**：\n点赞、评论、收藏、转发四项，跟视频一起落盘。\n做对标分析时这点很关键——光有一堆视频，过两个月你根本想不起来\n当时为什么存它。\n\n我自己做的就是这一类工具，Windows 桌面端，图形界面：\n\n- 粘贴分享链接 → 解析出无水印直链，可复制、可直接下载\n- 支持图集（图文作品），缩略图预览后勾选下载\n- 支持主页批量解析，一次把某个账号的作品列表整页拉出来\n- 单项附带点赞 / 评论 / 收藏 / 转发数据\n\n> **一句实话**：这类工具都要先扫码登录一次抖音，这是抖音接口的要求，\n> 不登录拿不到作品数据（免 Cookie 的野路子现在一律返回空）。\n> 登录态存在本机，扫一次以后就不用再扫了。\n\n👉 https://douyin-parser-42948.app.workbuddy.host/?ref=zhihu\n\n下载后能免费试用（每天 3 次），确认能用再考虑激活，不用先掏钱。\n\n**最后重复一遍**：工具只是工具。用来存自己的东西很方便，\n用来搬别人的东西是侵权。这个边界请自己守住。", "extra": "", "extraLabel": "", "refs": [], "refLabel": "", "url": "https://www.zhihu.com/", "color": "#0084ff"}, {"id": "zhihu-b", "platform": "知乎", "week": 2, "title": "抖音视频怎么保存无水印的？", "target": "先搜索这个问题，挑关注人数最多的那个进去回答。链接放文末。", "body": "这个问题下面大部分回答会给你推一堆在线网页，我不推荐用那些。\n\n原因很实在：\n\n1. **在线解析站活不长**。它们靠爬虫养着，接口一改就挂，\n   你今天是能用的，下周再打开可能就是一片 404。\n2. **你的链接进过别人的服务器**。你解析的每一条链接、拿到的每一条数据，\n   都留在对方日志里。用来存自己的作品，等于把账号行为交给陌生人。\n3. **跑不通就是跑不通**。现在抖音对未登录请求的限制已经很死了，\n   游客态拿到的响应是空的，在线站普遍只能给你低画质或者干脆失败。\n\n那么靠谱的做法是什么？**把解析放在你自己的电脑上跑**。\n\n原理讲一下，其实不复杂：\n\n```\n分享短链 v.douyin.com/xxxx\n   ↓ 跟随 302 跳转\n拿到真实作品 ID（aweme_id）\n   ↓ 带登录态请求详情接口\n拿到无水印播放地址 + 封面 + 互动数据\n```\n\n水印不是烧进视频里的，它是播放器叠的一层，\n所以直链指向的文件本身就是干净的。\n\n我在 Windows 上做了个桌面端工具做这件事，图形界面，不用敲命令：\n\n- 粘贴分享链接 → 直接出无水印直链，可复制可下载\n- 图集（图文作品）也能整组存，先预览缩略图再挑要哪几张\n- 支持主页批量，一次把某个账号的作品列表拉出来\n- 每条自动记录点赞 / 评论 / 收藏 / 转发，方便日后再看\n- 解析出来的记录可以一键备份、误删了还能恢复\n\n> **一个必须说清楚的前置条件**：解析前要扫码登录一次抖音。\n> 这是抖音接口的要求，不是软件故意设门槛——不带登录态时接口返回空数据，\n> 所有免 Cookie 的方案现在都已经失效。扫一次，登录态存在本机，之后长期有效。\n\n👉 https://douyin-parser-42948.app.workbuddy.host/?ref=zhihu\n\n有免费额度，每天 3 次，先用着看能不能满足需求。\n\n**合规提醒**：本工具仅用于保存你本人创作的内容，或已获得授权的内容。\n下载的视频受著作权保护，请勿用于二次发布、搬运或任何商业用途。", "extra": "", "extraLabel": "", "refs": [], "refLabel": "", "url": "https://www.zhihu.com/", "color": "#0084ff"}, {"id": "zhihu-c", "platform": "知乎", "week": 2, "title": "做自媒体怎么拆解对标账号？", "target": "先搜索这个问题，挑关注人数最多的那个进去回答。链接放文末。", "body": "做自媒体最容易陷入的一个误区：**收藏等于做过**。\n\n刷到好内容，点个收藏，然后它就在收藏夹里躺到天荒地老。\n我早期就是这样，收藏夹几千条，真到要输出的时候一条都想不起来。\n\n后来我把流程改成这样，效率提升很明显。核心就一句话：\n**存素材必须连数据一起存，否则等于白存。**\n\n### 我的四步流程\n\n**第一步：整页拉取对标账号的作品列表。**\n不要一条一条去刷，直接拿账号主页链接，把作品列表整页拉下来。\n一次能拉 20 页，足够覆盖一个账号大半年的内容。\n\n**第二步：按互动数据排序，筛出异常值。**\n重点看那些**明显高于该账号平均水平**的作品。\n平均水平的爆款说明不了什么，异常值才有信息量——\n它证明这个选题或这种结构，在这个账号的受众里是有效的。\n\n**第三步：存原文件 + 记录当时的四项数据。**\n这是最关键的一步，也是大多数人跳过的一步。\n光存一个视频没有用，两个月后你看着文件名根本想不起来当时为什么存它。\n把点赞、评论、收藏、转发一起记下来，回看时一眼就能明白。\n\n这里有个经验：**收藏/点赞比**比点赞数本身更能说明内容质量。\n点赞是顺手点的，收藏是有用的才存。\n一个点赞 5000 收藏 200 的作品，和一个点赞 3000 收藏 1500 的作品，\n后者的参考价值高得多。\n\n**第四步：按月回看，看内容方向的变化。**\n攒够一个月的数据，回头看这个账号的内容方向是怎么漂移的。\n单个作品的分析价值有限，**方向的变化才是真信息**。\n\n### 工具\n\n上面四步我全靠手动做了一阵子，第 1、3 步太耗时间，后来自己写了个工具。\n\nWindows 桌面端，图形界面：\n\n- 粘贴主页链接 → 整页拉取作品列表\n- 列表里直接显示点赞 / 评论 / 收藏 / 转发，可以排序筛\n- 勾选要存的作品，存原文件，数据一并导出\n- 解析记录会本地保存，误删可恢复，方便长期积累\n\n> 前置条件：第一次用要扫码登录一次抖音（接口要求，不登录取不到数据），\n> 登录态存本机，之后不用重复扫。\n\n👉 https://douyin-parser-42948.app.workbuddy.host/?ref=zhihu\n\n下载就能免费试用，每天 3 次。\n\n**合规提醒**：素材用于学习和拆解是合理的，但拆解不等于搬运。\n下载的内容受著作权保护，请勿二次发布或用于商业用途。", "extra": "", "extraLabel": "", "refs": [], "refLabel": "", "url": "https://www.zhihu.com/", "color": "#0084ff"}, {"id": "csdn-1", "platform": "CSDN", "week": 2, "title": "抖音分享链接解析：从短链到无水印直链的完整流程", "target": "发布页里标签填：Python、Playwright、逆向、Qt；分类选「Python」或「爬虫」", "body": "### 写在前面\n\n这篇文章记录的是我把一个抖音链接解析工具从能跑到能用的全过程。\n不讲怎么绕过风控，也不提供可直接复制的签名实现——那些东西写出来只会加速失效。\n讲的是**架构决策和踩过的坑**，这些才是过了半年还值钱的部分。\n\n合规口径先摆在这里：本文讨论的能力仅用于保存本人创作或已获授权的内容。\n下载的内容受著作权保护，请勿二次发布或用于商业用途。\n\n---\n\n### 一、短链跳转：拿到真实作品 ID\n\n抖音分享出来的链接长这样：\n\n```\nhttps://v.douyin.com/xxxxxxx/\n```\n\n这个短链里没有任何可用信息。真实作品 ID（下称 `aweme_id`）藏在跳转之后。\n\n```python\nresp = session.get(short_url, allow_redirects=False, timeout=10)\nlocation = resp.headers.get(\"Location\", \"\")\n```\n\n**第一个坑**：不要用 `allow_redirects=True` 一把梭。\n实践中短链可能出现多次跳转，而且中间会插入风控用的中间页，\n一把梭跟到最后拿到的 URL 里可能根本没有 ID。\n正确做法是**逐跳处理，每一跳都记下来**，从最后一跳里正则提取：\n\n```python\nm = re.search(r\"/video/(\\d+)\", final_url) or re.search(r\"modal_id=(\\d+)\", final_url)\n```\n\n**第二个坑**：分享文案里的链接经常是「复制此条信息，打开抖音App」这种形态，\nURL 后面跟着中文文案，有的还夹了不可见的 Unicode 字符。\n提取之前先把整段文本过一遍正则拿 URL，再处理，不要直接 `get()` 原始输入。\n\n---\n\n### 二、登录态：这一步绕不过去\n\n这是最容易被低估的一环。很多教程会告诉你「不带 Cookie 也能抓」，\n在 2024 年之前可能成立，现在不行了。实测结果：\n\n| 请求形态 | 接口返回 |\n|---|---|\n| 完全无 Cookie | 响应体为空 |\n| 游客态 ttwid | `filter_reason=core_dep` |\n| 未签名请求 | 风控码 2483 |\n| 有效登录态 + 签名 | 正常数据 |\n\n**结论：拿到真实登录态是唯一可行的路子。**\n\n获取方式上我试过三种：\n\n1. **手动从浏览器复制** —— 可行但体验极差，用户要按 F12、找请求头、复制一大串字符串，\n   任何一个环节走错就失败。而且 Cookie 会过期，用户过几天又要来一遍。\n2. **Playwright 内置 Chromium** —— 体验最好，点一下按钮扫码就完事，\n   代价是 Chromium 独占 **719 MB**，整个程序装完 944 MB。\n3. **Playwright 调用系统浏览器** —— 折中方案。\n\n最终选了第 3 个：\n\n```python\n# 按优先级找本机已装的浏览器\nfor channel, paths in ((\"msedge\", EDGE_PATHS), (\"chrome\", CHROME_PATHS)):\n    if any(os.path.isfile(p) for p in paths):\n        browser = p.chromium.launch(headless=True, channel=channel)\n        break\n```\n\nWin10/11 自带 Edge，装机率接近 100%，这条路径对绝大多数用户是通的。\n只有系统里两个都没有时，才退回手动粘贴。\n\n**第三个坑**：扫码登录要判断的是**是否真的登录了**，\n而不是「浏览器打开成功了」。我一开始就栽在这里——\n浏览器起来了，但用户没扫，拿到的 Cookie 是游客态，\n后面所有请求全部返回空，错误信息还特别具有误导性。\n\n正确做法是检查具体的登录态字段：\n\n```python\nLOGIN_KEYS = (\"sessionid\", \"sessionid_ss\", \"sid_tt\", \"passport_csrf_token\")\n\ndef has_valid_login_cookie(cookies):\n    for c in cookies:\n        if c[\"name\"] in LOGIN_KEYS and c[\"value\"] and len(c[\"value\"]) > 20:\n            return True\n    return False\n```\n\n拿到之后序列化成请求头存到本地，之后长期复用。\n\n---\n\n### 三、请求签名：只讲思路\n\n详情页接口要求请求参数带签名（业界俗称 a_bogus / X-Bogus）。\n这里**只讲思路，不贴实现**，原因有两个：\n一是贴出来会加速失效，二是这套本来就属于对方的风控资产。\n\n大方向是这样的：\n\n1. 把业务参数按字典序排列，拼成查询串\n2. 与 User-Agent、时间戳等一起参与混淆\n3. 经过若干轮自定义的位运算与查表，生成固定长度的签名串\n4. 追加到查询串末尾\n\n逆向的主要成本不在算法本身，而在**定位加密函数**——\n混淆后的 JS 里函数名叫 `_0x1a2b` 这种，得靠调用栈和特征字符串去锚。\n\n**第四个坑**：签名依赖 User-Agent。\n请求时的 UA 必须和生成签名时用的一致，差一个字符就 403。\n我的做法是把 UA 当常量全局共用，不在任何地方二次生成。\n\n---\n\n### 四、数据结构：无水印直链藏在哪\n\n拿到详情 JSON 后，关键路径：\n\n```python\naweme    = data.get(\"aweme_detail\") or {}\n# 视频\nuri      = aweme[\"video\"][\"play_addr\"][\"url_list\"][0]\n# 图集\nimages   = aweme.get(\"images\") or []\n```\n\n这里有个容易踩空的点：**`url_list` 里第一个 URL 未必是最终地址**，\n它可能还要再跳一次 CDN。下载时必须 `stream=True` 跟着重定向走。\n\n**水印问题**：返回的直链本身就是无水印的原文件。\n水印是播放器在渲染时叠的一层，不在文件里。\n所以\"去水印\"这个说法其实不准确，我们做的是**拿到播放器拿到之前的那份文件**。\n\n**第五个坑**：图集和视频是两套结构。\n判断依据是 `images` 字段是否存在，存在就是图集，\n千万不能用 `aweme_type` 猜——实测它对不上。\n\n互动数据在同一个对象里：\n\n```python\nstats = aweme.get(\"statistics\") or {}\ndigg    = stats.get(\"digg_count\")      # 点赞\ncomment = stats.get(\"comment_count\")   # 评论\nshare   = stats.get(\"share_count\")     # 转发\ncollect = stats.get(\"collect_count\")   # 收藏\n```\n\n---\n\n### 五、体积优化：719 MB → 59 MB\n\n这是整个项目里最有意思的一段。\n\n第一版打包出来 **342 MB 安装包 / 944 MB 安装后**，其中 Chromium 独占 719 MB。\n一个下载 5 分钟、安装 5 分钟的东西，转化率必然难看。\n\n优化路径是把内置 Chromium 换成调用系统浏览器：\n\n| 版本 | 安装包 | 安装后 | 功能 |\n|---|---|---|---|\n| 完整版（内置内核） | 342 MB | 944 MB | 全 |\n| 精简版（借系统浏览器） | 59 MB | 223 MB | **完全一致** |\n\n**第六个坑（也是最蠢的一个）**：\n我一开始对\"精简版\"的理解是「把登录功能砍掉」，\n于是设了个 `DISABLE_LOGIN` 开关，精简版直接不支持自动获取 Cookie——\n结果就是**精简版根本解析不了任何东西**，因为登录态是硬需求。\n\n这是个典型的把\"精简\"和\"阉割\"搞混的错误。\n后来改成借用系统浏览器，砍的是 719 MB 的浏览器体积，\n功能一个没少。体积和体验不必然互斥。\n\n教训：**先确认哪些是硬依赖，再谈裁剪。**\n把硬依赖当成可选功能砍掉，得到的是一个能装上、但什么都干不了的废品。\n\n---\n\n### 六、踩坑清单（速查）\n\n| # | 坑 | 现象 | 解法 |\n|---|---|---|---|\n| 1 | 短链一把梭跟跳转 | 拿不到 ID | 逐跳处理，最后一跳才提取 |\n| 2 | 分享文案夹带中文和不可见字符 | 正则匹配失败 | 先从文本里抽 URL 再处理 |\n| 3 | 浏览器起来了但没扫码 | 全部请求返回空 | 检查具体登录态字段，别只看进程 |\n| 4 | 签名与 UA 不一致 | 403 | UA 设成全局常量 |\n| 5 | 用 `aweme_type` 判断图集 | 类型判断错误 | 看 `images` 字段存不存在 |\n| 6 | 把硬依赖当可选功能砍掉 | 软件能装但不能用 | 裁剪前先分清硬依赖与可选项 |\n\n---\n\n### 七、关于图形界面\n\n工具最终用 PySide6（Qt6）做壳，原因很实际：\n这类工具的使用者是运营、剪辑，不是开发，命令行没有转化率可言。\n\n两个值得一提的取舍：\n\n- **耗时操作一律丢 QThread**，解析和下载都走信号回主线程，界面不卡死\n- **记录本地持久化**，列表误删可恢复——用户最怕的不是功能少，是\"我辛辛苦苦攒的记录没了\"\n\n---\n\n## 文末引导（发布时保留）\n\n---\n\n上面这套流程完整实现下来其实挺占篇幅的——短链跳转、登录态获取、\n请求签名、类型判断、体积优化，每个环节都有坑，\n而且这些坑会随着对方接口调整不断换新。\n\n我把这些封装成了一个 Windows 桌面工具，图形界面，粘贴链接就能用，\n顺带把点赞 / 评论 / 收藏 / 转发数据一起导出来。\n\n👉 https://douyin-parser-42948.app.workbuddy.host/?ref=csdn\n\n是付费软件（月版 ¥19 起），下载后可以先免费试用，每天 3 次。\n\n> **合规提示**：仅用于保存本人创作或已获授权的内容，\n> 请勿用于搬运或二次发布。", "extra": "", "extraLabel": "", "refs": [], "refLabel": "", "url": "https://mp.csdn.net/mp_blog/creation/editor", "color": "#fc5531"}, {"id": "xhs-a", "platform": "小红书", "week": 3, "title": "剪辑党的素材库，我终于理清楚了", "target": "链接放主页简介，不要出现在这段正文里", "body": "做剪辑最耗时间的从来不是剪，是找素材、存素材、整理素材。\n\n之前我的流程是：看到好的参考 → 手机录屏 → 传到电脑 → 画质糊一半 →\n想找回来找不到出处。\n\n现在换成直接在电脑上存原文件，顺便把数据一起记下来：\n\n· 粘贴链接就能存，画质是源文件级别的\n· 图文笔记也能整组存，缩略图先预览再挑\n· 可以整页拉取某个账号的内容，做对标拆解特别快\n· 每条都带点赞/评论/收藏/转发，回看时一眼看出当时为什么存它\n\n存完自动命名归档，回头找素材不用翻半天。\n\n（电脑端工具，第一次用要扫码登录一次，之后就不用管了）\n\n#剪辑 #素材管理 #自媒体工具 #效率工具", "extra": "工具在主页简介里 👆", "extraLabel": "评论区置顶（单独复制）", "refs": [], "refLabel": "", "url": "https://creator.xiaohongshu.com/publish/publish", "color": "#ff2442"}, {"id": "xhs-b", "platform": "小红书", "week": 3, "title": "拆解对标账号，我的素材归档流程", "target": "链接放主页简介，不要出现在这段正文里", "body": "做自媒体最重要的一件事：把对标账号拆明白。\n\n我的做法是建一个本地素材库，按账号归档：\n\n1. 整页拉取对标账号的内容列表\n2. 筛出数据明显高出一截的那几条\n3. 存原文件 + 记录当时的互动数据\n4. 按月回看，看内容方向的变化\n\n关键是第 3 步——光存视频没用，得把数据一起存下来，\n不然过两个月你根本想不起来当时为什么存它。\n\n再说个小经验：比起点赞数，我更看收藏/点赞比。\n点赞是顺手点的，收藏是有用的才存。\n一个点赞 5000 收藏 2000 的，参考价值远大于点赞 1 万收藏 800 的。\n\n我现在用电脑端工具做这件事，粘贴链接就出结果，\n数据一并导出，比手动记表格快太多。\n\n#自媒体 #对标拆解 #运营干货 #效率工具", "extra": "工具在主页简介里 👆", "extraLabel": "评论区置顶（单独复制）", "refs": [], "refLabel": "", "url": "https://creator.xiaohongshu.com/publish/publish", "color": "#ff2442"}, {"id": "xhs-c", "platform": "小红书", "week": 3, "title": "自己发的内容，一定要留一份本地备份", "target": "链接放主页简介，不要出现在这段正文里", "body": "说个容易忽略的事：你发在平台上的内容，本地不一定有完整备份。\n\n手机换了、账号出问题、原始素材误删——任何一种情况发生，\n那些内容就找不回来了。\n\n我吃过这个亏。之前有一批内容原始素材误删，只存在平台上，\n后来想重新剪一版，只能从平台重新存，画质还降了一档。\n\n现在我的习惯是每个月把当月发的内容存一份原文件到硬盘，\n顺便记一下每条的数据，年底回看特别清楚：\n\n· 一键拉取当月全部作品\n· 存原文件，画质不降档\n· 图文笔记也一起存\n· 数据跟着文件走，不用再翻后台\n\n工具是电脑端的，粘贴自己作品的链接就能存。\n\n#备份 #自媒体 #数字资产 #效率工具", "extra": "工具在主页简介里 👆", "extraLabel": "评论区置顶（单独复制）", "refs": [], "refLabel": "", "url": "https://creator.xiaohongshu.com/publish/publish", "color": "#ff2442"}, {"id": "bili-1", "platform": "B站", "week": 3, "title": "花两周做了个抖音视频解析工具，聊聊踩了哪些坑", "target": "先按下面「分镜表 + 录屏清单」录屏剪辑，成片好了再回来复制简介", "body": "抖音视频解析工具，Windows 桌面端。\n· 单视频 / 图集 / 主页批量解析\n· 无水印原文件 + 四项互动数据\n· 精简版 59MB，调用系统 Edge / Chrome\n· 第一次用需扫码登录一次（抖音接口要求，不登录取不到数据）\n\n下载：https://douyin-parser-42948.app.workbuddy.host/?ref=bili\n\n仅用于保存本人创作或已获授权的内容，请勿用于搬运或二次发布。", "extra": "", "extraLabel": "", "refs": [{"label": "分镜表", "text": "| 时间 | 画面 | 口播要点 |\n|---|---|---|\n| 0:00–0:30 | 成品界面演示，快速过一遍功能 | 「先看看成品：粘链接、解析、下载，三步。图集、主页批量也支持。」 |\n| 0:30–1:30 | 讲需求背景 | 「起因是我自己要存素材，发现市面上的工具要么带水印，要么只能存视频拿不到数据。在线解析站我又不敢用——链接要过别人的服务器。」 |\n| 1:30–3:30 | 讲技术：短链跳转、登录态 | 「第一个坑：短链不能一把梭跟跳转，中间会插风控页，得逐跳处理，从最后一跳拿 ID。第二个坑：现在不登录拿不到数据，我试过免 Cookie 方案，接口返回空，走不通。」 |\n| 3:30–5:00 | 讲请求签名（**只讲思路，不贴实现**） | 「请求要带签名，这块只讲思路：参数是排序后经过混淆生成的，逆向成本主要在定位加密函数——混淆后的 JS 里函数名叫 _0x1a2b 这种，得靠调用栈去锚。」 |\n| 5:00–6:30 | 讲体积优化：719MB → 59MB | 「最有意思的是体积。完整版 944MB，其中 Chromium 独占 719MB。后来改成调用系统 Edge，安装包直接降到 59MB，功能一点没少。」 |\n| 6:30–7:00 | **讲那个蠢错误**（这段最出彩，别剪掉） | 「但我中间犯了个特别蠢的错：我一开始以为精简版就是把登录砍掉，结果砍完发现——精简版什么也解析不了，因为登录态是硬需求。这是把'精简'和'阉割'搞混了。」 |\n| 7:00–7:40 | 演示批量 + 数据导出 | 「主页批量解析，四条互动数据一起导出，做对标分析很方便。记录还会本地保存，误删能恢复。」 |\n| 7:40–8:00 | 结尾 | 「是付费软件，下载能先试用。链接在简介。**重申一遍：只用来存自己的或已授权的内容，别拿去搬运。**」 |\n\n---"}, {"label": "录屏清单", "text": "（照这个顺序录，剪辑最快）\n\n| 编号 | 内容 | 用途 | 时长 |\n|---|---|---|---|\n| S1 | 粘贴链接 → 解析 → 下载 全流程 | 0:00–0:30 | 30s |\n| S2 | 图集缩略图预览 + 勾选 | 6:30–7:00 | 20s |\n| S3 | 主页批量解析，列表刷出来 | 6:30–7:40 | 40s |\n| S4 | 数据列特写（赞/评/转/藏） | 7:00–7:20 | 15s |\n| S5 | 扫码登录界面（打码二维码） | 1:30–3:30 插空 | 10s |\n| S6 | 安装前后体积对比截图 | 5:00–6:30 | 15s |\n\n> S5 的二维码**必须打码**，否则视频里出现可扫的登录码会被判风险内容。\n\n---"}], "refLabel": "分镜表 / 录屏清单（参考资料，不用复制）", "url": "https://member.bilibili.com/platform/upload-video/video/frame", "color": "#fb7299"}];
+const KEY = 'douyin-parser-publish-console';
+let done = JSON.parse(localStorage.getItem(KEY) || '{}');
+
+function save(){ localStorage.setItem(KEY, JSON.stringify(done)); render(); }
+
+function copy(text, btn){
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+  };
+  const ok = () => {
+    const old = btn.textContent;
+    btn.textContent = '已复制 ✓'; btn.classList.add('copied');
+    setTimeout(()=>{ btn.textContent = old; btn.classList.remove('copied'); }, 1600);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(ok, () => { fallback(); ok(); });
+  } else { fallback(); ok(); }
+}
+
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function preview(text){
+  const lines = text.split('\n');
+  const short = lines.length > 12;
+  return '<pre' + (short ? '' : ' class="open"') + '>' + esc(short ? lines.slice(0,12).join('\n') : text)
+       + (short ? '\n…' : '') + '</pre>';
+}
+
+function card(it){
+  const isDone = !!done[it.id];
+  let h = '<div class="card' + (isDone?' done':'') + '" data-w="' + it.week + '" data-id="' + it.id + '">';
+  h += '<div class="top"><span class="tag" style="background:' + it.color + '">' + it.platform + '</span>';
+  h += '<span class="tt">' + esc(it.title) + '</span></div>';
+  h += '<div class="n">' + esc(it.target) + '</div>';
+  h += preview(it.body);
+
+  if (it.refs && it.refs.length){
+    h += '<details><summary>' + esc(it.refLabel || '参考资料') + '</summary>';
+    for (const r of it.refs){
+      h += '<details style="margin:8px 0 0 12px"><summary>' + esc(r.label) + '</summary>';
+      h += '<pre class="open">' + esc(r.text) + '</pre></details>';
+    }
+    h += '</details>';
+  }
+
+  h += '<div class="btns">';
+  h += '<button class="act pri" data-copy="body">复制正文</button>';
+  if (it.extra) h += '<button class="act" data-copy="extra">' + esc(it.extraLabel||'复制附加') + '</button>';
+  h += '<button class="act" data-open="1">打开 ' + it.platform + ' 创作页</button>';
+  h += '<span class="spacer"></span>';
+  h += '<button class="act' + (isDone?' dn':'') + '" data-toggle="1">' + (isDone?'撤销已发':'标记已发') + '</button>';
+  h += '</div>';
+
+  if (it.platform === '小红书'){
+    h += '<div class="warn"><b>小红书发布铁律</b>：正文不要出现「去水印 / 下载抖音 / 搬运 / 解析」，'
+       + '链接放主页简介或评论区置顶，不要放正文。</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function render(){
+  const all = ITEMS.length;
+  const n = ITEMS.filter(i => done[i.id]).length;
+  document.getElementById('bar').style.width = (n / all * 100) + '%';
+  document.getElementById('prog').textContent =
+    '已发布 ' + n + ' / ' + all + ' 篇　（第 2 周 4 篇 · 第 3 周 4 篇）';
+  document.getElementById('list').innerHTML =
+    ITEMS.filter(i => cur === 'all' || String(i.week) === cur).map(card).join('');
+}
+
+let cur = 'all';
+document.querySelectorAll('.tabs button').forEach(b => {
+  b.onclick = () => {
+    cur = b.dataset.w;
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on'); render();
+  };
+});
+
+document.getElementById('list').addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  const el = e.target.closest('.card'); const it = ITEMS.find(x => x.id === el.dataset.id);
+  if (btn.dataset.copy === 'body'){ copy(it.body, btn); }
+  else if (btn.dataset.copy === 'extra'){ copy(it.extra, btn); }
+  else if (btn.dataset.open){ window.open(it.url, '_blank'); }
+  else if (btn.dataset.toggle){
+    if (done[it.id]) delete done[it.id]; else done[it.id] = Date.now();
+    save();
+  }
+});
+
+render();
+</script>
+</body>
+</html>
