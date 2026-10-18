@@ -38,8 +38,15 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 
-# ---- 私钥：已设为 32 字节强随机值。切勿泄露此文件 / 切勿提交到公开仓库 ----
-SECRET = b"CHANGE-ME-请填入你自己的32字节随机私钥"
+# ---- 私钥：必须换成你自己的 32 字节强随机值 ----
+# 生成方式（复制运行结果粘到这里）：
+#     python -c "import secrets; print(secrets.token_urlsafe(32))"
+#
+# ⚠️ 注意两点：
+#   1. 这是 bytes 字面量，只能写 ASCII。中文会直接 SyntaxError
+#      （bytes can only contain ASCII literal characters）。
+#   2. 私钥一旦泄露，任何人都能伪造激活码。请勿提交真实值到公开仓库。
+SECRET = b"CHANGE-ME-replace-with-your-own-32-byte-secret"
 
 APP_NAME = "DouyinParser"
 
@@ -307,3 +314,80 @@ def active_plan():
     if not ok:
         return "", ""
     return label, expiry_of(get_machine_id(), saved)
+
+
+# ---------------- 免费试用 ----------------
+#
+# 设计取舍：
+#   · 按「次」不按「天」。下载器的需求是脉冲式的——想存某个视频时打开，
+#     存完就关。按天给会让人觉得「反正能免费用一周，不着急」，反而拖慢决策。
+#   · 功能不阉割。试用解析出来的和付费版一模一样。如果被试用版给出低画质，
+#     买家只会得出「这软件不行」的结论，比干脆不给试用更糟。
+#   · 计数文件放在本地，删掉就能重置。这是可接受的漏洞：真想白嫖的人
+#     本来也不会付费，而为这点漏洞去上在线校验，得不偿失。
+#     唯一做了一层防护：系统时间往回调不刷新额度。
+
+TRIAL_DAILY_LIMIT = 3
+
+
+def trial_path() -> str:
+    """试用计数存放位置，与 license.key 同目录。"""
+    try:
+        return os.path.join(os.path.dirname(license_path()), "trial.dat")
+    except Exception:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "trial.dat")
+
+
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def trial_state():
+    """返回 (记录的日期, 当天已用次数)。读不到就当作全新一天、零次。"""
+    try:
+        with open(trial_path(), "r", encoding="utf-8") as f:
+            parts = f.readline().split()
+        if len(parts) == 2 and parts[1].isdigit():
+            return parts[0], int(parts[1])
+    except Exception:
+        pass
+    return _today(), 0
+
+
+def _save_trial(day: str, used: int) -> None:
+    try:
+        with open(trial_path(), "w", encoding="utf-8") as f:
+            f.write(f"{day}\t{used}\n")
+    except Exception:
+        pass
+
+
+def trial_left() -> int:
+    """今日剩余免费次数。
+
+    已激活返回 -1（不限次）；未激活返回 0..TRIAL_DAILY_LIMIT。
+    """
+    if is_activated():
+        return -1
+    day, used = trial_state()
+    today = _today()
+    if day != today:
+        # 记录的日期比今天还新，说明系统时间被往回调了 —— 不给刷新
+        if day > today:
+            return 0
+        return TRIAL_DAILY_LIMIT
+    return max(0, TRIAL_DAILY_LIMIT - used)
+
+
+def trial_consume() -> bool:
+    """消耗一次免费额度。返回 True 表示放行，False 表示今日额度已用完。"""
+    if is_activated():
+        return True
+    if trial_left() <= 0:
+        return False
+    day, used = trial_state()
+    today = _today()
+    if day != today:
+        day, used = today, 0
+    _save_trial(day, used + 1)
+    return True

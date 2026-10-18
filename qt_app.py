@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import webbrowser
 from datetime import datetime
 
 import requests
@@ -61,27 +62,120 @@ else:
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_SAVE_DIR = os.path.join(BASE_DIR, "downloads")
 
+# 购买页地址。试用额度用尽、激活过期时都跳这里。
+BUY_URL = "https://douyin-parser-42948.app.workbuddy.host/"
+
+
+def _find_chrome_exe(base):
+    """在 playwright-browsers 目录下定位 chrome.exe。
+
+    Playwright 不同版本的内核目录名不一样：
+      - 新版 64 位：chromium-<rev>/chrome-win64/chrome.exe
+      - 旧版      ：chromium-<rev>/chrome-win/chrome.exe
+      - headless 壳：chromium_headless_shell-<rev>/chrome-win/headless_shell.exe
+    只认其中一种会导致完整版被误判成「没带内核」，所以这里全都要找。
+    """
+    if not base or not os.path.isdir(base):
+        return ""
+    # (目录名前缀, 候选子目录, 可执行文件名)
+    patterns = (
+        ("chromium-",      ("chrome-win64", "chrome-win", ""), "chrome.exe"),
+        ("chromium_",      ("chrome-win64", "chrome-win", ""), "chrome.exe"),
+    )
+    try:
+        names = sorted(os.listdir(base))
+    except Exception:
+        return ""
+    for prefix, subdirs, exe_name in patterns:
+        for name in names:
+            if not name.startswith(prefix):
+                continue
+            root = os.path.join(base, name)
+            for sub in subdirs:
+                exe = os.path.join(root, sub, exe_name)
+                if os.path.exists(exe):
+                    return exe
+    # 兜底：直接递归找一层，防止以后 Playwright 再改目录结构
+    try:
+        for name in names:
+            if not name.startswith("chromium"):
+                continue
+            root = os.path.join(base, name)
+            for sub in sorted(os.listdir(root)):
+                exe = os.path.join(root, sub, "chrome.exe")
+                if os.path.exists(exe):
+                    return exe
+    except Exception:
+        pass
+    return ""
+
+
+# 复用系统里已经装好的浏览器，优先 Edge：
+#   - Edge 是 Windows 10/11 自带组件，几乎装机率 100%
+#   - Chrome 装在标准路径时也能用
+# 这样就不必把 719MB 的 Chromium 打进安装包，完整功能版能从 342MB 压到 60MB 上下。
+SYSTEM_BROWSER_PATHS = (
+    ("msedge", (
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    )),
+    ("chrome", (
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    )),
+)
+
+
+def _system_browsers():
+    """返回本机可用的 [(channel, 可执行文件路径)]，按优先级排序。"""
+    found = []
+    for channel, candidates in SYSTEM_BROWSER_PATHS:
+        for exe in candidates:
+            if os.path.exists(exe):
+                found.append((channel, exe))
+                break
+    return found
+
 
 def _browser_available():
-    """精简版（未打包 Chromium 内核）返回 (False, 原因)，否则 (True, 路径)。
+    """返回 (能否扫码登录, 说明)。
 
-    打包时会把 PLAYWRIGHT_BROWSERS_PATH 指向 _MEIPASS/playwright-browsers；
-    精简版没有该目录，据此判断能否扫码登录。
+    三档兜底，缺一不可：
+      1. 安装包自带的 Chromium（完整版有，719MB）
+      2. 系统 Edge / Chrome（省掉 719MB 的关键）
+      3. 都没有 → 提示用户去装 Edge
+    以前只认第 1 档，导致精简版被一刀切成「不能登录」。
     """
     if not getattr(sys, "frozen", False):
         return True, "源码模式"
     base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
-    if not base or not os.path.isdir(base):
-        return False, "未内置浏览器内核目录"
-    try:
-        for name in os.listdir(base):
-            if name.startswith("chromium"):
-                exe = os.path.join(base, name, "chrome-win", "chrome.exe")
-                if os.path.exists(exe):
-                    return True, exe
-    except Exception:
-        pass
-    return False, "未找到 chrome.exe"
+    if base and os.path.isdir(base):
+        exe = _find_chrome_exe(base)
+        if exe:
+            return True, exe
+    for channel, exe in _system_browsers():
+        return True, f"{channel} → {exe}"
+    return False, "未找到可用浏览器（内置内核、Edge、Chrome 都没有）"
+
+
+def _launch_browser(p):
+    """依次尝试：内置 Chromium → 系统 Edge → 系统 Chrome。
+
+    内置内核优先，保证完整版行为不变；没有内置时才用系统的，
+    这样精简版不必再阉割扫码登录功能。
+    """
+    args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+    # 1) 安装包自带的 Chromium：完整版有，优先用它，行为与以前完全一致
+    base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
+    if base and os.path.isdir(base) and _find_chrome_exe(base):
+        return p.chromium.launch(headless=True, args=args), "内置内核"
+    # 2) 没有内置内核（精简版）→ 借用系统 Edge / Chrome
+    for channel, _exe in _system_browsers():
+        try:
+            return p.chromium.launch(headless=True, channel=channel, args=args), channel
+        except Exception:
+            continue        # 这个用不了就换下一个，别让用户自己去猜
+    raise RuntimeError("没有可用浏览器：内置内核缺失，且未检测到 Edge / Chrome")
 
 
 def safe_filename(text: str, fallback: str) -> str:
@@ -794,13 +888,8 @@ class CookieWorker(QThread):
         try:
             self.status.emit("启动浏览器...")
             with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                    ],
-                )
+                browser, source = _launch_browser(p)
+                self.status.emit(f"已启动浏览器（{source}）")
                 context = browser.new_context(
                     viewport={"width": 1280, "height": 800},
                     user_agent=DOUYIN_UA,
@@ -934,13 +1023,9 @@ class MainWindow(QMainWindow):
         self.save_dir = self.config.get("save_dir", DEFAULT_SAVE_DIR)
         self.thumbnail_worker = None
 
-        # 标题带上当前授权套餐与到期日，用户随时可见自己的授权状态
-        _label, _expiry = activation.active_plan()
-        if _label:
-            _tail = "（终身授权）" if _expiry == "终身" else f"（{_label} · 至 {_expiry}）"
-        else:
-            _tail = "（未激活）"
-        self.setWindowTitle(f"抖音无水印解析器 v2.1{_tail}")
+        # 标题带上当前授权状态，用户随时可见：已激活显示套餐与到期日，
+        # 未激活显示今日剩余免费次数（消耗额度后会重新刷新）
+        self._refresh_trial_title()
         self.setMinimumSize(1220, 860)
         icon_path = os.path.join(RESOURCE_DIR, "assets", "logo.ico")
         if os.path.exists(icon_path):
@@ -953,6 +1038,47 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(tabs)
         self._apply_style()
         self._apply_icons()
+
+    # ---------------- 授权与免费试用 ----------------
+
+    def _refresh_trial_title(self):
+        """刷新标题栏右侧的授权状态。
+
+        已激活 → 「（终身授权）」或「（年版 · 至 2027-10-18）」
+        未激活 → 「（试用 · 今日剩 N 次）」，额度用尽则「（未激活）」
+        """
+        label, expiry = activation.active_plan()
+        if label:
+            tail = "（终身授权）" if expiry == "终身" else f"（{label} · 至 {expiry}）"
+        else:
+            left = activation.trial_left()
+            tail = f"（试用 · 今日剩 {left} 次）" if left > 0 else "（未激活）"
+        self.setWindowTitle(f"抖音无水印解析器 v2.1{tail}")
+
+    def _take_trial_quota(self):
+        """消耗一次免费额度，返回 True 才允许继续解析。
+
+        已激活直接放行。额度用尽时弹窗说明，并给一个直达购买页的按钮——
+        这一步是转化漏斗的关键：用户刚体验过、确认能用，此刻购买意愿最高。
+        """
+        if activation.trial_consume():
+            self._refresh_trial_title()
+            return True
+
+        box = QMessageBox(self)
+        box.setWindowTitle("今日免费额度已用完")
+        box.setText(
+            f"未激活版本每天可免费解析 {activation.TRIAL_DAILY_LIMIT} 次，"
+            "今天的额度已经用完了。\n\n"
+            "激活后不限次数，解析出来的内容与试用完全一致——"
+            "不是试用版给低画质、买了才给高清那套。"
+        )
+        buy_btn = box.addButton("去购买激活", QMessageBox.AcceptRole)
+        box.addButton("明天再来", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is buy_btn:
+            webbrowser.open(BUY_URL)
+        return False
 
     def _apply_style(self):
         self.setStyleSheet(
@@ -1335,6 +1461,27 @@ class MainWindow(QMainWindow):
         path_row.addWidget(save_btn, 0)
         layout.addLayout(path_row)
 
+        # 授权区域：常驻入口。试用用户中途想买，不用重启软件。
+        license_label = QLabel("授权")
+        license_label.setObjectName("Label")
+        layout.addWidget(license_label)
+        lic_row = QHBoxLayout()
+        lic_row.setSpacing(12)
+        self.license_status = QLabel("")
+        self.license_status.setObjectName("Label")
+        activate_btn = QPushButton("填入激活码")
+        activate_btn.setMinimumHeight(42)
+        activate_btn.setCursor(Qt.PointingHandCursor)
+        buy_btn = QPushButton("购买激活")
+        buy_btn.setObjectName("Primary")
+        buy_btn.setMinimumHeight(42)
+        buy_btn.setCursor(Qt.PointingHandCursor)
+        lic_row.addWidget(self.license_status, 1)
+        lic_row.addWidget(activate_btn, 0)
+        lic_row.addWidget(buy_btn, 0)
+        layout.addLayout(lic_row)
+        self._refresh_license_status()
+
         layout.addStretch(1)
 
         if DISABLE_LOGIN:
@@ -1345,7 +1492,32 @@ class MainWindow(QMainWindow):
             get_cookie_btn.clicked.connect(self._on_get_cookie)
         browse_btn.clicked.connect(self._on_browse_dir)
         save_btn.clicked.connect(self._on_save_config)
+        activate_btn.clicked.connect(self._on_activate)
+        buy_btn.clicked.connect(lambda: webbrowser.open(BUY_URL))
         return widget
+
+    def _refresh_license_status(self):
+        """刷新配置页里的授权说明文字。"""
+        label, expiry = activation.active_plan()
+        if label:
+            self.license_status.setText(
+                f"已激活【{label}】，"
+                + ("永久有效" if expiry == "终身" else f"有效期至 {expiry}")
+            )
+        else:
+            left = activation.trial_left()
+            self.license_status.setText(
+                f"未激活 · 今日剩余免费额度 {max(left, 0)} / "
+                f"{activation.TRIAL_DAILY_LIMIT} 次"
+            )
+
+    def _on_activate(self):
+        """手动填入激活码。"""
+        dlg = ActivationDialog()
+        if dlg.exec() == QDialog.Accepted:
+            self._refresh_trial_title()
+            self._refresh_license_status()
+            QMessageBox.information(self, "激活成功", "已激活，现在不限次数使用。")
 
     def _build_table(self):
         table = QTableWidget(0, 6)
@@ -1364,6 +1536,9 @@ class MainWindow(QMainWindow):
     def _on_single_parse(self):
         url = self.single_input.text().strip()
         if not url:
+            return
+        # 先扣额度再校验 Cookie：额度没了就别让人白跑一趟扫码登录
+        if not self._take_trial_quota():
             return
         if not self.parser.cookie:
             QMessageBox.warning(
@@ -1688,6 +1863,9 @@ class MainWindow(QMainWindow):
         url = self.user_input.text().strip()
         if not url:
             return
+        # 主页批量也算一次：拉一次列表就是一次完整解析
+        if not self._take_trial_quota():
+            return
         if not self.parser.cookie:
             QMessageBox.warning(
                 self,
@@ -1874,16 +2052,34 @@ class MainWindow(QMainWindow):
             return
         ok, detail = _browser_available()
         if not ok:
-            QMessageBox.information(
-                self, "精简版提示",
-                "当前为【精简版】，未内置浏览器内核，无法扫码登录。\n\n"
-                "请手动获取 Cookie（只需做一次）：\n"
-                "1. 用浏览器打开 douyin.com 并登录\n"
-                "2. 按 F12 打开开发者工具 → 应用(Application)\n"
-                "   → Cookie → https://www.douyin.com\n"
-                "3. 复制整条 cookie 值\n"
-                "4. 粘贴到下方 Cookie 输入框 → 点「保存配置」\n\n"
-                "需要扫码登录的便捷方式请下载完整版。\n\n"
+            # 两种情况必须分开提示，否则完整版出问题时会被误报成「精简版」
+            browser_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
+            if getattr(sys, "frozen", False) and os.path.isdir(browser_dir):
+                QMessageBox.warning(
+                    self, "完整版异常",
+                    "完整版内置了浏览器内核，但没能定位到 chrome.exe。\n\n"
+                    "多半是安装包解压不完整，或被杀毒软件隔离了。\n"
+                    "请确认安装包里有这个目录：\n"
+                    "  _internal\\playwright-browsers\\chromium-*\n"
+                    "并重新解压/下载完整版。\n\n"
+                    "急着用的话，也可以先按下面方式手动填 Cookie：\n"
+                    "1. 浏览器打开 douyin.com 并登录\n"
+                    "2. F12 → 应用(Application) → Cookie → https://www.douyin.com\n"
+                    "3. 复制整条 cookie 值，粘贴到下方输入框 → 「保存配置」\n\n"
+                    f"（技术信息：{detail}）"
+                )
+                return
+            QMessageBox.warning(
+                self, "没找到可用浏览器",
+                "扫码登录需要调用本机的 Edge 或 Chrome，但都没检测到。\n\n"
+                "最省事的解决办法：装一个 Edge\n"
+                "  https://www.microsoft.com/edge\n"
+                "（Windows 10/11 正常是自带的，若被卸载过才会缺）\n"
+                "装完重启本软件即可扫码登录。\n\n"
+                "不想装浏览器，也可以手动填 Cookie（只需一次）：\n"
+                "1. 用任意浏览器打开 douyin.com 并登录\n"
+                "2. F12 → 应用(Application) → Cookie → https://www.douyin.com\n"
+                "3. 复制整条 cookie 值，粘贴到下方输入框 → 「保存配置」\n\n"
                 f"（技术信息：{detail}）"
             )
             return
@@ -2053,8 +2249,10 @@ class ActivationDialog(QDialog):
 
 def main():
     app = QApplication([])
-    # 未激活或已过期则先弹激活窗口，取消/失败即退出，不进入主界面
-    if not activation.is_activated():
+    # 未激活且今日免费额度已用尽 → 才拦下来弹激活窗口。
+    # 之前是「未激活一律拦」，买家装好 58MB 却连软件长什么样都看不到；
+    # 现在改成先让人用 3 次，确认真能解析再决定付不付钱。
+    if activation.trial_left() == 0:
         expired_msg = ""
         saved = activation.read_saved_code()
         if saved:

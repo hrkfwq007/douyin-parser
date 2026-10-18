@@ -57,3 +57,6 @@ store/
 # 虚拟环境
 venv/
 .venv/
+
+# 打包中间产物（build_installers.py 的临时目录）
+.pkg_tmp/

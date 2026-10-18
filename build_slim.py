@@ -1,10 +1,13 @@
 """瘦身版打包脚本（不内置 Chromium 浏览器内核）。
 
 与 build.py 的区别：
-    - 不打包 playwright-browsers（完整版里它占约 719MB），产物约 230MB
+    - 不打包 playwright-browsers（完整版里它占 719MB），产物约 223MB
     - 输出目录 dist/DouyinParserSlim，与完整版 dist/DouyinParser 并存，互不影响
-    - 功能完全一致，唯一差异：无法「扫码登录」自动获取 Cookie，
-      改为手动填写（软件内已给出图文步骤引导）
+
+关于扫码登录：早期精简版因为没有内核，直接把登录功能关掉了，等于残废。
+现在 qt_app 会自动借用系统自带的 Edge / Chrome（Windows 装机率接近 100%），
+所以精简版同样能扫码登录，功能与完整版一致，只是体积小 700MB。
+只有当本机连 Edge 和 Chrome 都没有时，才退回手动粘贴 Cookie。
 
 注意：license_gen.py（激活码生成器）同样不打包。
 """
