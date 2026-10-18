@@ -6,6 +6,7 @@ import html
 import json
 import os
 import re
+import shutil
 import sys
 import webbrowser
 from datetime import datetime
@@ -1132,6 +1133,8 @@ class MainWindow(QMainWindow):
             "下载到默认目录": "SP_ArrowDown",
             "下载勾选(默认目录)": "SP_ArrowDown",
             "清空": "SP_TrashIcon",
+            "清空记录": "SP_TrashIcon",
+            "恢复记录": "SP_FileDialogBack",
             "打开文件夹": "SP_DirOpenIcon",
             "选择目录": "SP_DirIcon",
             "获取Cookie": "SP_DialogApplyButton",
@@ -1361,6 +1364,23 @@ class MainWindow(QMainWindow):
         row.addWidget(self.user_clear_all_btn, 1)
         row.addWidget(self.user_download_btn, 1)
 
+        # 第二行操作按钮：打开目录 / 清空记录 / 恢复记录
+        row2 = QHBoxLayout()
+        row2.setSpacing(12)
+        self.user_open_dir_btn = QPushButton("打开文件夹")
+        self.user_open_dir_btn.setMinimumHeight(42)
+        self.user_open_dir_btn.setCursor(Qt.PointingHandCursor)
+        self.user_clear_records_btn = QPushButton("清空记录")
+        self.user_clear_records_btn.setMinimumHeight(42)
+        self.user_clear_records_btn.setCursor(Qt.PointingHandCursor)
+        self.user_restore_records_btn = QPushButton("恢复记录")
+        self.user_restore_records_btn.setMinimumHeight(42)
+        self.user_restore_records_btn.setCursor(Qt.PointingHandCursor)
+        row2.addWidget(self.user_open_dir_btn, 0)
+        row2.addWidget(self.user_clear_records_btn, 0)
+        row2.addWidget(self.user_restore_records_btn, 0)
+        row2.addStretch(1)
+
         self.user_table = self._build_table()
         self.user_loading = QProgressBar()
         self.user_loading.setRange(0, 0)
@@ -1371,6 +1391,7 @@ class MainWindow(QMainWindow):
         self.user_progress.setVisible(False)
 
         layout.addLayout(row)
+        layout.addLayout(row2)
         layout.addWidget(self.user_table)
         layout.addWidget(self.user_loading)
         layout.addWidget(self.user_progress)
@@ -1379,6 +1400,9 @@ class MainWindow(QMainWindow):
         self.user_download_btn.clicked.connect(self._on_user_download)
         self.user_select_all_btn.clicked.connect(lambda: self._toggle_all(self.user_table, True))
         self.user_clear_all_btn.clicked.connect(lambda: self._toggle_all(self.user_table, False))
+        self.user_open_dir_btn.clicked.connect(self._on_user_open_dir)
+        self.user_clear_records_btn.clicked.connect(self._on_user_clear_records)
+        self.user_restore_records_btn.clicked.connect(self._on_user_restore_records)
         return widget
 
     def _build_config_tab(self):
@@ -1898,6 +1922,7 @@ class MainWindow(QMainWindow):
         self.list_worker.result.connect(lambda info: self._append_row(self.user_table, info))
         self.list_worker.error.connect(self._user_error)
         self.list_worker.done.connect(lambda: self.user_loading.setVisible(False))
+        self.list_worker.done.connect(self._save_user_records)
         self.user_loading.setVisible(True)
         self.list_worker.start()
 
@@ -1957,6 +1982,117 @@ class MainWindow(QMainWindow):
         self.user_progress.setVisible(False)
         self.user_download_btn.setEnabled(True)
         QMessageBox.information(self, "下载完成", f"成功 {success} / {total}")
+
+    # ---------------- 批量解析记录（清空 / 恢复） ----------------
+
+    def _user_records_path(self):
+        """主页批量解析的记录文件路径（APPDATA/DouyinParser/user_records.json）。"""
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        d = os.path.join(base, "DouyinParser")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "user_records.json")
+
+    def _user_records_backup_path(self):
+        return self._user_records_path() + ".bak"
+
+    @staticmethod
+    def _serialize_info(info: dict) -> dict:
+        """把 info 里需要持久化的字段挑出来，保证能 JSON 序列化。"""
+        keys = (
+            "content_type", "desc", "aweme_id", "cover_url", "nwm_url",
+            "create_time", "image_count", "image_data", "qualities",
+            "digg_count", "comment_count", "share_count", "collect_count",
+        )
+        out = {}
+        for k in keys:
+            v = info.get(k)
+            if v is not None:
+                out[k] = v
+        return out
+
+    def _save_user_records(self):
+        """把当前主页批量解析表格里的记录落盘。"""
+        infos = []
+        for row in range(self.user_table.rowCount()):
+            item = self.user_table.item(row, 0)
+            if item:
+                info = item.data(Qt.UserRole)
+                if isinstance(info, dict):
+                    infos.append(self._serialize_info(info))
+        if not infos:
+            return
+        try:
+            with open(self._user_records_path(), "w", encoding="utf-8") as f:
+                json.dump(infos, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[warn] 保存记录失败：{e}")
+
+    def _load_user_records(self, src: str = None):
+        """从指定文件恢复记录到主页批量解析表格。"""
+        path = src or self._user_records_path()
+        if not os.path.exists(path):
+            return 0
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                infos = json.load(f)
+        except Exception as e:
+            print(f"[warn] 读取记录失败：{e}")
+            return 0
+        if not isinstance(infos, list):
+            return 0
+        self.user_table.setRowCount(0)
+        for info in infos:
+            self._append_row(self.user_table, info)
+        if infos:
+            self.user_download_btn.setEnabled(True)
+        return len(infos)
+
+    def _on_user_clear_records(self):
+        """清空记录：把当前表格内容备份到 .bak，然后清空表格。"""
+        path = self._user_records_path()
+        backup = self._user_records_backup_path()
+        # 先保存当前表格（确保内存数据写盘），再移到备份位置
+        self._save_user_records()
+        if os.path.exists(path):
+            try:
+                shutil.move(path, backup)
+            except Exception as e:
+                print(f"[warn] 备份记录失败：{e}")
+        self.user_table.setRowCount(0)
+        self.user_download_btn.setEnabled(False)
+        QMessageBox.information(self, "清空记录", "当前记录已清空。如需恢复，可点击「恢复记录」。")
+
+    def _on_user_restore_records(self):
+        """恢复记录：优先恢复当前 records.json；没有则把 .bak 复制回来恢复。"""
+        path = self._user_records_path()
+        backup = self._user_records_backup_path()
+        if os.path.exists(path):
+            n = self._load_user_records(path)
+            msg = f"已恢复 {n} 条记录。" if n else "当前没有可恢复的记录。"
+        elif os.path.exists(backup):
+            try:
+                shutil.copyfile(backup, path)
+            except Exception as e:
+                QMessageBox.warning(self, "恢复失败", f"无法复制备份文件：{e}")
+                return
+            n = self._load_user_records(path)
+            msg = f"已从备份恢复 {n} 条记录。"
+        else:
+            msg = "没有找到记录或备份文件，无法恢复。"
+        QMessageBox.information(self, "恢复记录", msg)
+
+    def _on_user_open_dir(self):
+        """打开主页批量解析的保存目录。"""
+        path = self.save_dir
+        if not os.path.exists(path):
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception:
+                pass
+        try:
+            os.startfile(path)
+        except Exception as e:
+            QMessageBox.warning(self, "打开文件夹失败", f"无法打开保存目录：\n{str(e)}")
 
     def _toggle_all(self, table: QTableWidget, checked: bool):
         for row in range(table.rowCount()):
