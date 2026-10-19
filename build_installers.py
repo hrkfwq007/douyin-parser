@@ -294,8 +294,10 @@ def build_one(tag: str, src_dir: str, exe_name: str, out_name: str,
         f'安装位置：%LOCALAPPDATA%\\\\{install_dir}\\n'
         f'解压体积约 {size_hint}。\\n\\n'
         f'是否继续？"\n'
-        'Progress="yes"\n'
-        'RunProgram="_setup.bat"\n'
+        "Progress=\"yes\"\n"
+        # hidcon: 前缀让 7zSD 用 CreateProcess 启动并隐藏控制台窗口，
+        # 绕过 Windows 11 默认终端（Windows Terminal）导致的管道关闭错误 0x800700e8。
+        'RunProgram="hidcon:cmd.exe /c _setup.bat"\n'
         ";!@InstallEnd@!\n"
     )
     with open(cfg_path, "w", encoding="utf-8", newline="\r\n") as f:
