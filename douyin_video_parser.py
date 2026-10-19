@@ -253,199 +253,146 @@ class DouyinVideoParser:
     
     @staticmethod
     def extract_image_data(data: dict) -> dict | None:
-        """Extract album image URLs (including live images/GIFs)"""
+        """Extract album image URLs in the same order as Douyin displays them.
+
+        The previous implementation used sets and split images into live/static
+        buckets, which destroyed the original order. Albums are narratives —
+        page 3 must stay page 3 after download.
+        """
         aweme = data.get("aweme_detail") or {}
         images = aweme.get("images") or []
-        
         if not images:
             return None
-        
-        # Separate live images and static images
-        live_urls_set = set()  # GIF/live images
-        static_urls_set = set()  # Static images
-        watermark_urls_set = set()  # Watermarked images
-        
-        for img in images:
-            if not isinstance(img, dict):
-                continue
-            
-            # Check if this image is marked as animated/live
-            # Key indicators: live_photo_type, clip_type, or video field exists
+
+        def _is_animated(img: dict) -> bool:
             live_photo_type = img.get("live_photo_type", 0)
             clip_type = img.get("clip_type", 0)
             has_video = bool(img.get("video"))
-            
-            is_animated_flag = (
-                live_photo_type == 1 or
-                clip_type == 5 or
-                has_video or
-                img.get("is_animated") == True or
-                img.get("is_animated") == 1 or
-                img.get("animated") == True or
-                img.get("animated") == 1 or
-                img.get("image_type") == "animated" or
-                img.get("type") == "animated" or
-                img.get("format") == "gif" or
-                str(img.get("image_type", "")).lower() == "live"
+            return bool(
+                live_photo_type == 1
+                or clip_type == 5
+                or has_video
+                or img.get("is_animated") is True
+                or img.get("is_animated") == 1
+                or img.get("animated") is True
+                or img.get("animated") == 1
+                or img.get("image_type") == "animated"
+                or img.get("type") == "animated"
+                or img.get("format") == "gif"
+                or str(img.get("image_type", "")).lower() == "live"
             )
-            
-            # Priority 0: Extract video URL from video field (for live images)
-            # If this is a live image with video, ONLY extract video URL, skip static images
-            if has_video and is_animated_flag:
-                video_obj = img.get("video", {})
-                # Try play_addr first (watermark-free)
-                play_addr = video_obj.get("play_addr", {})
-                play_url_list = play_addr.get("url_list", [])
-                if play_url_list:
-                    # Use first URL and skip all other processing for this image
-                    url = play_url_list[0]
-                    if url and isinstance(url, str):
-                        # Remove watermark parameters if present
-                        clean_url = url.split("&watermark=")[0].split("&logo_name=")[0]
-                        live_urls_set.add(clean_url)
-                        continue  # Skip to next image, don't process static URLs
-                # Fallback to download_addr (but remove watermark)
-                download_addr = video_obj.get("download_addr", {})
-                download_url_list = download_addr.get("url_list", [])
-                if download_url_list:
-                    url = download_url_list[0]
-                    if url and isinstance(url, str):
-                        # Remove watermark parameters
-                        clean_url = url.split("&watermark=")[0].split("&logo_name=")[0]
-                        live_urls_set.add(clean_url)
-                        continue  # Skip to next image
-            
-            # Priority 1: Try animated/live image fields (highest priority for live images)
-            animated_fields = [
-                "animated_url_list",
-                "animated_url",
-                "gif_url_list",
-                "gif_url",
-                "live_url_list",
-                "live_url",
-                "motion_url_list",
-                "motion_url",
+
+        def _url_looks_animated(url: str) -> bool:
+            lower = url.lower()
+            indicators = [
+                ".gif", "animated", "motion", "live",
+                "format=gif", "animated=1", "motion=1",
+                "type=animated", "is_animated=1",
             ]
-            for field in animated_fields:
-                url_data = img.get(field)
-                if url_data:
-                    if isinstance(url_data, str):
-                        if url_data:
-                            live_urls_set.add(url_data)
-                    elif isinstance(url_data, list):
-                        for url in url_data:
+            return any(ind in lower for ind in indicators)
+
+        final_urls = []       # (url, is_live) in display order
+        watermark_urls = []   # tracked separately for backward compat
+
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+
+            is_anim = _is_animated(img)
+            selected = None
+            is_live = False
+
+            # 1) Live photo with embedded video -> use the (watermark-free) video URL
+            if is_anim and img.get("video"):
+                video_obj = img.get("video", {})
+                for addr_key in ("play_addr", "download_addr"):
+                    addr = video_obj.get(addr_key) or {}
+                    for url in addr.get("url_list", []):
+                        if url and isinstance(url, str):
+                            selected = url.split("&watermark=")[0].split("&logo_name=")[0]
+                            is_live = True
+                            break
+                    if selected:
+                        break
+
+            # 2) Animated fields (gif/live/motion)
+            if not selected and is_anim:
+                for field in (
+                    "animated_url_list", "animated_url", "gif_url_list", "gif_url",
+                    "live_url_list", "live_url", "motion_url_list", "motion_url",
+                ):
+                    val = img.get(field)
+                    if not val:
+                        continue
+                    if isinstance(val, str):
+                        selected = val
+                        is_live = True
+                        break
+                    if isinstance(val, list):
+                        for url in val:
                             if url and isinstance(url, str):
-                                live_urls_set.add(url)
-            
-            # Priority 2: Try url_list (static images, watermark-free)
-            # Only process if NOT a live image with video (already handled above)
-            if not (has_video and is_animated_flag):
-                url_list = img.get("url_list") or []
-                # Only take first URL to avoid duplicates
-                if url_list:
-                    url = url_list[0]
+                                selected = url
+                                is_live = True
+                                break
+                        if selected:
+                            break
+
+            # 3) Static url_list (watermark-free)
+            if not selected:
+                for url in img.get("url_list", []):
                     if url and isinstance(url, str):
-                        url_lower = url.lower()
-                        # Check if URL contains gif/webp animation indicators or parameters
-                        is_live_indicator = (
-                            is_animated_flag or
-                            any(indicator in url_lower for indicator in [".gif", "gif", "animated", "motion", "live"]) or
-                            "format=gif" in url_lower or
-                            "animated=1" in url_lower or
-                            "motion=1" in url_lower or
-                            "type=animated" in url_lower or
-                            "is_animated=1" in url_lower
-                        )
-                        if is_live_indicator:
-                            live_urls_set.add(url)
-                        else:
-                            static_urls_set.add(url)
-            
-            # Priority 3: Try download_url_list (may have watermark)
-            # Only process if NOT a live image with video
-            if not (has_video and is_animated_flag):
-                download_list = img.get("download_url_list") or []
-                # Only take first URL to avoid duplicates
-                if download_list:
-                    url = download_list[0]
+                        if _url_looks_animated(url):
+                            is_live = True
+                        selected = url
+                        break
+
+            # 4) download_url_list (usually watermarked)
+            if not selected:
+                for url in img.get("download_url_list", []):
                     if url and isinstance(url, str):
-                        watermark_urls_set.add(url)
-            
-            # Priority 4: Try other possible fields (only if not live image with video)
-            if not (has_video and is_animated_flag):
-                for field in ["url", "origin_url"]:
-                    url = img.get(field)
-                    if url:
-                        if isinstance(url, str):
-                            url_lower = url.lower()
-                            is_live_indicator = (
-                                is_animated_flag or
-                                any(indicator in url_lower for indicator in [".gif", "gif", "animated", "motion", "live"]) or
-                                "format=gif" in url_lower or
-                                "animated=1" in url_lower or
-                                "motion=1" in url_lower or
-                                "type=animated" in url_lower or
-                                "is_animated=1" in url_lower
-                            )
-                            if is_live_indicator:
-                                live_urls_set.add(url)
-                            elif url not in static_urls_set and url not in watermark_urls_set:
-                                static_urls_set.add(url)
-                        elif isinstance(url, list) and url:
-                            # Only take first URL to avoid duplicates
-                            u = url[0]
-                            if u and isinstance(u, str):
-                                url_lower = u.lower()
-                                is_live_indicator = (
-                                    any(indicator in url_lower for indicator in [".gif", "gif", "animated", "motion", "live"]) or
-                                    "format=gif" in url_lower or
-                                    "animated=1" in url_lower or
-                                    "motion=1" in url_lower or
-                                    "type=animated" in url_lower or
-                                    "is_animated=1" in url_lower
-                                )
-                                if is_live_indicator:
-                                    live_urls_set.add(u)
-                                elif u not in static_urls_set and u not in watermark_urls_set:
-                                    static_urls_set.add(u)
-        
-        # Convert sets to lists
-        live_urls = list(live_urls_set)
-        static_urls = list(static_urls_set)
-        watermark_urls = list(watermark_urls_set)
-        
-        # Priority: Use live URLs (video) if available, otherwise use static URLs, finally fallback to watermarked
-        # For live images, we want the video, not the static image
-        if live_urls:
-            final_urls = live_urls
-            is_live = True
-        elif static_urls:
-            final_urls = static_urls
-            is_live = False
-        elif watermark_urls:
-            final_urls = watermark_urls
-            is_live = False
-        else:
+                        selected = url
+                        watermark_urls.append(url)
+                        break
+
+            # 5) Fallback fields
+            if not selected:
+                for field in ("url", "origin_url"):
+                    val = img.get(field)
+                    if isinstance(val, str) and val:
+                        selected = val
+                        break
+                    if isinstance(val, list) and val:
+                        for url in val:
+                            if url and isinstance(url, str):
+                                selected = url
+                                break
+                        if selected:
+                            break
+
+            if selected:
+                final_urls.append((selected, is_live))
+
+        if not final_urls:
             return None
-        
-        # Final deduplication: remove URLs that are duplicates when query params are removed
+
+        # Deduplicate while preserving order (compare base URL without query string)
         seen_clean = set()
-        deduplicated_urls = []
-        for url in final_urls:
-            clean_url = url.split("?")[0] if "?" in url else url
-            if clean_url not in seen_clean:
-                seen_clean.add(clean_url)
-                deduplicated_urls.append(url)
-        
-        if not deduplicated_urls:
-            return None
-        
+        deduplicated = []
+        any_live = False
+        for url, is_live in final_urls:
+            clean = url.split("?")[0] if "?" in url else url
+            if clean not in seen_clean:
+                seen_clean.add(clean)
+                deduplicated.append(url)
+                if is_live:
+                    any_live = True
+
         return {
-            "image_urls": deduplicated_urls,
+            "image_urls": deduplicated,
             "image_urls_watermark": watermark_urls,
-            "image_count": len(deduplicated_urls),
-            "preview_url": deduplicated_urls[0] if deduplicated_urls else None,
-            "is_live": is_live,  # Indicate if these are live images (video URLs)
+            "image_count": len(deduplicated),
+            "preview_url": deduplicated[0] if deduplicated else None,
+            "is_live": any_live,
         }
     
     @staticmethod
