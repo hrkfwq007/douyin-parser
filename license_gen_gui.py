@@ -15,6 +15,7 @@
 """
 
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -185,7 +186,7 @@ class MainWindow(QMainWindow):
         self.kind_group.setExclusive(True)
         self.rb_bind = QRadioButton("绑定码（一码一机）")
         self.rb_universal = QRadioButton("通用码（不绑机器，可批量备货）")
-        self.rb_universal.setChecked(True)
+        self.rb_bind.setChecked(True)
         self.kind_group.addButton(self.rb_bind)
         self.kind_group.addButton(self.rb_universal)
         kind_row.addWidget(self.rb_bind)
@@ -199,9 +200,11 @@ class MainWindow(QMainWindow):
         lbl3.setObjectName("Label")
         mid_row.addWidget(lbl3)
         self.mid_edit = QLineEdit()
-        self.mid_edit.setPlaceholderText("留空即生成通用码；绑定码请粘贴用户软件里显示的机器码")
+        self.mid_edit.setPlaceholderText("粘贴用户软件里显示的 16 位机器码")
         self.mid_edit.setEnabled(False)
         self.mid_edit.setClearButtonEnabled(True)
+        self.mid_edit.setMinimumWidth(280)
+        self.mid_edit.textChanged.connect(self._on_mid_changed)
         mid_row.addWidget(self.mid_edit, 1)
 
         self.count_spin = QSpinBox()
@@ -211,6 +214,10 @@ class MainWindow(QMainWindow):
         self.count_spin.setFixedWidth(110)
         mid_row.addWidget(self.count_spin)
         card_layout.addLayout(mid_row)
+
+        self.mid_hint = QLabel("机器码为 16 位，复制时不要漏字符")
+        self.mid_hint.setObjectName("Sub")
+        card_layout.addWidget(self.mid_hint)
 
         layout.addWidget(card)
 
@@ -275,6 +282,31 @@ class MainWindow(QMainWindow):
         bind = self.rb_bind.isChecked()
         self.mid_edit.setEnabled(bind)
         self.count_spin.setEnabled(not bind)
+        self._update_mid_hint()
+
+    def _on_mid_changed(self):
+        """用户粘贴机器码时自动去掉横线、统一大写。"""
+        txt = self.mid_edit.text()
+        norm = re.sub(r"[^0-9A-Za-z]", "", txt).upper()
+        if norm != txt:
+            self.mid_edit.setText(norm)
+        self._update_mid_hint()
+
+    def _update_mid_hint(self):
+        if not self.rb_bind.isChecked():
+            self.mid_hint.setText("机器码为 16 位，复制时不要漏字符")
+            self.mid_hint.setStyleSheet("")
+            return
+        n = len(self.mid_edit.text().strip())
+        if n == 0:
+            self.mid_hint.setText("机器码为 16 位，复制时不要漏字符")
+            self.mid_hint.setStyleSheet("color: #8b93a1;")
+        elif n < 16:
+            self.mid_hint.setText(f"⚠ 当前只有 {n} 位，请补全到 16 位")
+            self.mid_hint.setStyleSheet("color: #f0a45d;")
+        else:
+            self.mid_hint.setText(f"✓ 已输入 {n} 位，可以生成")
+            self.mid_hint.setStyleSheet("color: #7ee2b8;")
 
     def _generate(self):
         plan = self._current_plan()
@@ -297,6 +329,13 @@ class MainWindow(QMainWindow):
         mid = self.mid_edit.text().strip()
         if not mid:
             QMessageBox.warning(self, "缺少机器码", "绑定码必须填写用户的机器码。\n若无需绑定，请切换为「通用码」。")
+            return
+        if len(mid) < 16:
+            QMessageBox.warning(
+                self, "机器码不完整",
+                f"当前机器码只有 {len(mid)} 位，用户软件里显示的机器码应为 16 位。\n"
+                "请完整复制后再生成。"
+            )
             return
         try:
             code = activation.make_code(mid, plan, universal=False)
