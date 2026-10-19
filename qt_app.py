@@ -44,6 +44,11 @@ from PySide6.QtWidgets import (
 
 from douyin_video_parser import DouyinVideoParser
 import activation
+import updater
+
+# 安装包变体：精简版入口 qt_app_slim.py 会把它设成 slim。
+# 决定自动更新时去站点问哪一份安装包。
+VARIANT = (os.environ.get("DP_VARIANT") or "full").strip().lower()
 
 DISABLE_LOGIN = os.environ.get("DISABLE_LOGIN", "0") == "1"
 
@@ -988,6 +993,47 @@ class ClickableLabel(QLabel):
         super().mousePressEvent(event)
 
 
+class UpdateCheckWorker(QThread):
+    """后台问一次服务器有没有新版本。
+
+    单独开线程是因为网络请求可能卡好几秒，绝不能拖住界面启动。
+    出错时 result 发 None —— 检查失败和「没有更新」对界面是同一回事。
+    """
+
+    result = Signal(object)
+
+    def __init__(self, variant, parent=None):
+        super().__init__(parent)
+        self.variant = variant
+
+    def run(self):
+        try:
+            self.result.emit(updater.check(self.variant))
+        except Exception:
+            self.result.emit(None)
+
+
+class UpdateDownloadWorker(QThread):
+    """后台下载更新包。进度按字节回传，界面自己换算成百分比。"""
+
+    progress = Signal(int, int)
+    finished = Signal(bool, str)
+
+    def __init__(self, info, parent=None):
+        super().__init__(parent)
+        self.info = info
+
+    def run(self):
+        def on_progress(done, total):
+            self.progress.emit(done, total)
+
+        try:
+            ok, res = updater.download(self.info, progress=on_progress)
+        except Exception as e:
+            ok, res = False, str(e)
+        self.finished.emit(bool(ok), res if isinstance(res, str) else str(res))
+
+
 class ThumbnailWorker(QThread):
     """后台异步下载图集缩略图，逐张回传给主线程渲染。"""
 
@@ -1040,6 +1086,16 @@ class MainWindow(QMainWindow):
         self._apply_style()
         self._apply_icons()
 
+        # 启动后自己去问一次有没有新版本。不弹窗打扰，只在配置页按钮上标出来。
+        QTimer.singleShot(1500, self._autocheck_update)
+
+    def _autocheck_update(self):
+        """启动时静默检查。失败、无更新都无声无息。"""
+        try:
+            self._start_check(force=False)
+        except Exception:
+            pass
+
     # ---------------- 授权与免费试用 ----------------
 
     def _refresh_trial_title(self):
@@ -1054,7 +1110,7 @@ class MainWindow(QMainWindow):
         else:
             left = activation.trial_left()
             tail = f"（试用 · 今日剩 {left} 次）" if left > 0 else "（未激活）"
-        self.setWindowTitle(f"抖音无水印解析器 v2.1{tail}")
+        self.setWindowTitle(f"抖音无水印解析器 v{updater.APP_VERSION}{tail}")
 
     def _take_trial_quota(self):
         """消耗一次免费额度，返回 True 才允许继续解析。
@@ -1505,6 +1561,7 @@ class MainWindow(QMainWindow):
         lic_row.addWidget(buy_btn, 0)
         layout.addLayout(lic_row)
         self._refresh_license_status()
+        layout.addWidget(self._build_update_section())
 
         layout.addStretch(1)
 
@@ -1519,6 +1576,165 @@ class MainWindow(QMainWindow):
         activate_btn.clicked.connect(self._on_activate)
         buy_btn.clicked.connect(lambda: webbrowser.open(BUY_URL))
         return widget
+
+    # ---------------- 软件更新 ----------------
+
+    def _build_update_section(self):
+        """配置页底部的更新区：当前版本 + 检查/更新按钮 + 进度条。"""
+        box = QVBoxLayout()
+        box.setSpacing(10)
+
+        title = QLabel("软件更新")
+        title.setObjectName("Label")
+        box.addWidget(title)
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        self.update_status = QLabel(f"当前版本 v{updater.APP_VERSION}")
+        self.update_status.setObjectName("Label")
+
+        self.update_btn = QPushButton("检查更新")
+        self.update_btn.setMinimumHeight(42)
+        self.update_btn.setCursor(Qt.PointingHandCursor)
+
+        row.addWidget(self.update_status, 1)
+        row.addWidget(self.update_btn, 0)
+        box.addLayout(row)
+
+        self.update_progress = QProgressBar()
+        self.update_progress.setMinimum(0)
+        self.update_progress.setMaximum(100)
+        self.update_progress.setValue(0)
+        self.update_progress.setTextVisible(True)
+        self.update_progress.hide()
+        box.addWidget(self.update_progress)
+
+        self.update_btn.clicked.connect(self._on_check_update)
+        # 有更新时按钮变主色，是这个区块唯一的视觉信号
+        self._pending_update = None
+        self._update_worker = None
+        self._download_worker = None
+        return self._wrap(box)
+
+    def _wrap(self, layout):
+        """把一段布局塞进一个空白 widget（addLayout 只接受 widget 时用它）。"""
+        w = QWidget()
+        w.setLayout(layout)
+        return w
+
+    def _on_check_update(self):
+        """点按钮：有待装的更新就直接装，否则去问一次服务器。"""
+        if self._pending_update:
+            self._confirm_install(self._pending_update)
+            return
+        self.update_btn.setEnabled(False)
+        self.update_status.setText("正在检查…")
+        self._start_check(force=True)
+
+    def _start_check(self, force=False):
+        """启动后台检查。force 表示用户手动点的，跳过每日节流。"""
+        if not force and not updater.should_check():
+            return
+        self._update_worker = UpdateCheckWorker(VARIANT, self)
+        self._update_worker.result.connect(self._on_update_result)
+        self._update_worker.start()
+        updater.mark_checked()
+
+    def _on_update_result(self, info):
+        """检查回来。没更新就恢复原样，有更新就把按钮变醒目。"""
+        if self.sender() is self._update_worker:
+            self.update_btn.setEnabled(True)
+        if not info:
+            self._pending_update = None
+            self.update_status.setText(
+                f"当前版本 v{updater.APP_VERSION}（已是最新）" if self.sender() is self._update_worker
+                else f"当前版本 v{updater.APP_VERSION}"
+            )
+            self.update_btn.setText("检查更新")
+            self.update_btn.setObjectName("")
+            self._restylize_button(self.update_btn)
+            return
+
+        ver = info.get("version", "")
+        if updater.is_skipped(ver) and not info.get("force"):
+            self.update_status.setText(f"当前版本 v{updater.APP_VERSION}（已跳过 v{ver}）")
+            self.update_btn.setEnabled(True)
+            return
+
+        self._pending_update = info
+        mb = int(info.get("size") or 0) / 1024 / 1024
+        self.update_status.setText(f"发现新版本 v{ver}（{mb:.0f} MB）")
+        self.update_btn.setText(f"更新到 v{ver}")
+        self.update_btn.setObjectName("Primary")
+        self._restylize_button(self.update_btn)
+        self.update_btn.setEnabled(True)
+
+    def _restylize_button(self, btn):
+        """改了 objectName 之后必须重新套样式，否则新配色不生效。"""
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+
+    def _confirm_install(self, info):
+        """问一句再装。force 的更新不给「跳过」。"""
+        ver = info.get("version", "")
+        notes = (info.get("notes") or "").strip()
+        mb = int(info.get("size") or 0) / 1024 / 1024
+        text = (
+            f"新版本 v{ver}（{mb:.0f} MB）\n\n"
+            + (notes + "\n\n" if notes else "")
+            + "更新会关闭本程序并打开安装程序，按提示点「是」即可。\n"
+            "你的 Cookie、激活状态和已下载的视频都会保留。"
+        )
+        box = QMessageBox(self)
+        box.setWindowTitle("软件更新")
+        box.setText(text)
+        ok_btn = box.addButton("立即更新", QMessageBox.AcceptRole)
+        if not info.get("force"):
+            box.addButton("以后再说", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not ok_btn:
+            updater.skipped_version(ver)
+            return
+        self._start_download(info)
+
+    def _start_download(self, info):
+        self.update_btn.setEnabled(False)
+        self.update_progress.setValue(0)
+        self.update_progress.show()
+        self.update_status.setText("正在下载更新包…")
+        self._download_worker = UpdateDownloadWorker(info, self)
+        self._download_worker.progress.connect(self._on_download_progress)
+        self._download_worker.finished.connect(self._on_download_done)
+        self._download_worker.start()
+
+    def _on_download_progress(self, done, total):
+        if total > 0:
+            self.update_progress.setValue(min(100, int(done * 100 / total)))
+            self.update_status.setText(
+                f"正在下载… {done / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB"
+            )
+        else:
+            self.update_status.setText(f"正在下载… {done / 1024 / 1024:.1f} MB")
+
+    def _on_download_done(self, ok, res):
+        self.update_progress.hide()
+        if not ok:
+            self.update_btn.setEnabled(True)
+            self.update_status.setText(f"更新失败：{res}")
+            QMessageBox.warning(self, "更新失败", f"{res}\n\n软件仍可正常使用，可稍后重试。")
+            return
+        self.update_status.setText("下载完成，正在打开安装程序…")
+        if updater.launch_installer(res):
+            # 立刻退出：安装器要替换本程序的 exe，占着不放会失败
+            QApplication.exit(0)
+        else:
+            self.update_btn.setEnabled(True)
+            self.update_status.setText("无法启动安装程序，请手动安装")
+            QMessageBox.warning(
+                self, "需要手动安装",
+                f"安装包已下载到：\n{res}\n\n请双击它完成更新。"
+            )
 
     def _refresh_license_status(self):
         """刷新配置页里的授权说明文字。"""

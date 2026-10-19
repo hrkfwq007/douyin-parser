@@ -13,6 +13,9 @@ import sys
 # 明确不要再关掉登录：精简版不是残废版
 os.environ["DISABLE_LOGIN"] = "0"
 
+# 告诉 qt_app 自动更新时该问哪一份安装包（站点 version.json 里的 key）
+os.environ["DP_VARIANT"] = "slim"
+
 from qt_app import main
 
 

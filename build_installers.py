@@ -67,7 +67,7 @@ SEVEN_ZIP = r"C:\Program Files\7-Zip\7z.exe"
 SFX_SRC = os.path.join(TMP, "sfx", "7zSD.sfx")
 SDK_URL = "https://www.7-zip.org/a/lzma2604.7z"
 
-VERSION = "v2.1"
+VERSION = "v2.2"
 
 # ---------------------------------------------------------------------------
 # 安装脚本：由 7zSD 在解压完成后执行，负责「搬到目标位置 + 建快捷方式」
@@ -89,11 +89,31 @@ chcp 65001>nul 2>&1
 setlocal
 set "SRC=%~dp0"
 set "DST=%LOCALAPPDATA%\\@@DIR@@"
+set "KEEP=%TEMP%\\@@DIR@@_keep"
 title @@TITLE@@
 
 echo 正在安装 @@TITLE@@，请稍候…
 
+rem (0) 自动更新场景：客户端刚退出，文件句柄可能还没放干净。
+rem     等两秒再动手，否则 rd 会失败、新 exe 也覆盖不上去。
+ping -n 3 127.0.0.1 >nul 2>&1
+
+rem (1) 先把用户数据搬出去。
+rem     早期版本直接 rd /s /q 整个目录，结果把 Cookie 和已下载的视频全删了 ——
+rem     买家更新一次就丢一次文件，这不能接受。这里改成备份后恢复。
+if exist "%KEEP%" rd /s /q "%KEEP%"
+md "%KEEP%" 2>nul
+if exist "%DST%\\config.json" move /y "%DST%\\config.json" "%KEEP%\\config.json" >nul 2>&1
+if exist "%DST%\\douyin_cookie.txt" move /y "%DST%\\douyin_cookie.txt" "%KEEP%\\douyin_cookie.txt" >nul 2>&1
+if exist "%DST%\\license.key" move /y "%DST%\\license.key" "%KEEP%\\license.key" >nul 2>&1
+if exist "%DST%\\downloads" move /y "%DST%\\downloads" "%KEEP%\\downloads" >nul 2>&1
+
+rem (2) 清掉旧版本（删不干净时退一步重试一次，仍失败就靠后面的 xcopy 兜底）
 if exist "%DST%" rd /s /q "%DST%"
+if exist "%DST%" (
+  ping -n 3 127.0.0.1 >nul 2>&1
+  rd /s /q "%DST%"
+)
 if not exist "%DST%" md "%DST%" 2>nul
 if not exist "%DST%" (
   echo 无法创建目标目录，安装中止。
@@ -106,6 +126,28 @@ for %%F in ("%SRC%*") do if /i not "%%~nxF"=="_setup.bat" move /y "%%~F" "%DST%"
 
 rem 若旧目录被占用导致没搬干净，退化为复制，保证最终能用
 if not exist "%DST%\\@@EXE@@" xcopy "%SRC%*" "%DST%" /E /C /H /R /K /Y >nul 2>&1
+
+rem (3) 把用户数据放回去。备份优先：新包里带的是空配置，不能让它盖掉真数据。
+if exist "%KEEP%\\config.json" (
+  if exist "%DST%\\config.json" del /f /q "%DST%\\config.json" >nul 2>&1
+  move /y "%KEEP%\\config.json" "%DST%\\config.json" >nul 2>&1
+)
+if exist "%KEEP%\\douyin_cookie.txt" (
+  if exist "%DST%\\douyin_cookie.txt" del /f /q "%DST%\\douyin_cookie.txt" >nul 2>&1
+  move /y "%KEEP%\\douyin_cookie.txt" "%DST%\\douyin_cookie.txt" >nul 2>&1
+)
+if exist "%KEEP%\\license.key" (
+  if exist "%DST%\\license.key" del /f /q "%DST%\\license.key" >nul 2>&1
+  move /y "%KEEP%\\license.key" "%DST%\\license.key" >nul 2>&1
+)
+if exist "%KEEP%\\downloads" (
+  if exist "%DST%\\downloads" (
+    xcopy "%KEEP%\\downloads\\*" "%DST%\\downloads\\" /E /C /H /R /K /Y >nul 2>&1
+  ) else (
+    move /y "%KEEP%\\downloads" "%DST%\\downloads" >nul 2>&1
+  )
+)
+if exist "%KEEP%" rd /s /q "%KEEP%"
 
 powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$ws=New-Object -ComObject WScript.Shell; $d=[IO.Path]::Combine($ws.SpecialFolders('Desktop'),'@@LNK@@.lnk'); $s=$ws.CreateShortcut($d); $s.TargetPath='%LOCALAPPDATA%\\@@DIR@@\\@@EXE@@'; $s.WorkingDirectory='%LOCALAPPDATA%\\@@DIR@@'; $s.Description='@@LNK@@'; $s.Save()" >nul 2>&1
 
