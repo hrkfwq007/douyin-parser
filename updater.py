@@ -32,7 +32,7 @@ except Exception:  # 没 requests 时不能让 import 本身炸掉
 
 # 软件版本号。发新版时改这里，站点 version.json 里也要改，两边比对决定要不要更新。
 # 这个号只用于比对大小，不要求和安装包文件名里的版本字面一致。
-APP_VERSION = "2.2"
+APP_VERSION = "2.2.1"
 
 # 站点地址。改域名时只改这一处（和 qt_app.BUY_URL 保持同一个域名）。
 UPDATE_BASE = "https://douyin-parser-42948.app.workbuddy.host"

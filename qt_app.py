@@ -832,6 +832,16 @@ class DownloadWorker(QThread):
         # Check if these are live images
         is_live = image_data.get("is_live", False)
         
+        # 把原始 images 顺序写成调试文件，顺序不对时用户把这个文件发我就能定位
+        raw_debug = image_data.get("_raw_debug")
+        if raw_debug:
+            try:
+                dbg_path = os.path.join(album_dir, "_debug_order.json")
+                with open(dbg_path, "w", encoding="utf-8") as f:
+                    json.dump(raw_debug, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
         success_count = 0
         for img_idx, img_url in enumerate(image_urls, start=1):
             try:
@@ -2047,7 +2057,16 @@ class MainWindow(QMainWindow):
             folder_name = safe_filename(desc, aweme_id)
             album_dir = os.path.join(self.save_dir, folder_name)
             os.makedirs(album_dir, exist_ok=True)
-            
+
+            # 写入调试文件，方便定位图集顺序问题
+            raw_debug = image_data.get("_raw_debug")
+            if raw_debug:
+                try:
+                    with open(os.path.join(album_dir, "_debug_order.json"), "w", encoding="utf-8") as f:
+                        json.dump(raw_debug, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+
             self.single_progress.setVisible(True)
             self.single_progress.setRange(0, len(image_urls))
             self.single_progress.setValue(0)

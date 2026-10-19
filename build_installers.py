@@ -67,7 +67,7 @@ SEVEN_ZIP = r"C:\Program Files\7-Zip\7z.exe"
 SFX_SRC = os.path.join(TMP, "sfx", "7zSD.sfx")
 SDK_URL = "https://www.7-zip.org/a/lzma2604.7z"
 
-VERSION = "v2.2"
+VERSION = "v2.2.1"
 
 # ---------------------------------------------------------------------------
 # 安装脚本：由 7zSD 在解压完成后执行，负责「搬到目标位置 + 建快捷方式」

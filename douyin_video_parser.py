@@ -264,6 +264,54 @@ class DouyinVideoParser:
         if not images:
             return None
 
+        # 抖音有些作品的 images 列表顺序并不等于真实显示顺序。
+        # 如果每个图片元素自身带了位置字段（index/position/order 等），
+        # 优先按它排序，比盲信列表顺序更稳。
+        def _img_order(img):
+            if not isinstance(img, dict):
+                return -1
+            for key in (
+                "index", "position", "order", "pos", "rank",
+                "aweme_image_position", "img_index", "image_index",
+                "sequence", "sort",
+            ):
+                val = img.get(key)
+                if isinstance(val, int) and val >= 0:
+                    return val
+            return -1
+
+        order_keys = [_img_order(img) for img in images]
+        if (
+            order_keys
+            and all(k >= 0 for k in order_keys)
+            and len(set(order_keys)) == len(order_keys)
+        ):
+            images = sorted(images, key=_img_order)
+
+        # 保存一份原始顺序的调试数据，方便用户反馈时定位 API 顺序问题。
+        # 只保留关键字段，体积不大；GUI 保存图集时会把它落到 album 目录。
+        raw_debug = []
+        for idx, img in enumerate(images):
+            if not isinstance(img, dict):
+                continue
+            url0 = None
+            if isinstance(img.get("url_list"), list) and img["url_list"]:
+                url0 = img["url_list"][0]
+            dl0 = None
+            if isinstance(img.get("download_url_list"), list) and img["download_url_list"]:
+                dl0 = img["download_url_list"][0]
+            idx_fields = {
+                k: v for k, v in img.items()
+                if isinstance(v, int) and 0 <= v <= 10000
+            }
+            raw_debug.append({
+                "list_index": idx,
+                "uri": img.get("uri"),
+                "url_list_0": url0,
+                "download_url_list_0": dl0,
+                "idx_fields": idx_fields,
+            })
+
         def _is_animated(img: dict) -> bool:
             live_photo_type = img.get("live_photo_type", 0)
             clip_type = img.get("clip_type", 0)
@@ -393,6 +441,7 @@ class DouyinVideoParser:
             "image_count": len(deduplicated),
             "preview_url": deduplicated[0] if deduplicated else None,
             "is_live": any_live,
+            "_raw_debug": raw_debug,
         }
     
     @staticmethod
